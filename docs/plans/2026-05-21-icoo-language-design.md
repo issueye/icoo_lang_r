@@ -1298,6 +1298,8 @@ env.has(name: String) -> Bool
 
 后续新增内置库统一使用 `std.` 前缀作为标准库命名空间。已有的 `math`、`time`、`json`、`env` 仍保留全局访问能力，也可以通过 `std.*` 导入后使用；新增内置库默认必须显式导入，不会注册为全局常量：
 
+内置模块在 Rust 代码中按模块拆成独立单元，统一登记在 `src/native_modules/`。每个单元声明自己的导入路径、内部模块 kind、类型名和可导出方法，解释器和类型检查器都从同一份注册表读取，避免新增标准库时同时修改多处分发白名单。
+
 ```python
 import "std.io" as io
 import "std.io.fs" as fs

@@ -1,6 +1,7 @@
 pub mod error;
 pub mod interpreter;
 pub mod lexer;
+pub mod native_modules;
 pub mod parser;
 pub mod resolver;
 pub mod runtime;

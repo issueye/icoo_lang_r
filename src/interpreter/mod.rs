@@ -1,5 +1,6 @@
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::native_modules;
 use crate::parser::ast::*;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
 use crate::runtime::value::*;
@@ -69,7 +70,7 @@ impl Interpreter {
     }
 
     fn load_import_value(&mut self, source: &str, span: Span) -> IcooResult<Value> {
-        if let Some(module_name) = importable_native_module_name(source) {
+        if let Some(module_name) = native_modules::import_path(source) {
             return Ok(Value::NativeModule(Rc::new(NativeModule {
                 name: module_name.to_string(),
             })));
@@ -624,7 +625,7 @@ impl Interpreter {
             });
         }
         if let Value::NativeModule(module) = &object {
-            if has_native_module_method(&module.name, name) {
+            if native_modules::has_method(&module.name, name) {
                 return Ok(Value::NativeModuleMethod(Rc::new(NativeModuleMethod {
                     module: module.name.clone(),
                     name: name.to_string(),
@@ -1124,7 +1125,7 @@ impl Interpreter {
         args: Vec<Value>,
         span: Span,
     ) -> IcooResult<Value> {
-        match (native_module_kind(&method.module), method.name.as_str()) {
+        match (native_modules::kind(&method.module), method.name.as_str()) {
             ("math", "abs") => {
                 expect_arity(&args, 1, span)?;
                 match &args[0] {
@@ -3036,59 +3037,6 @@ fn now_duration(span: Span) -> IcooResult<Duration> {
         .map_err(|err| IcooError::runtime(format!("system time error: {}", err), Some(span)))
 }
 
-fn has_native_module_method(module: &str, name: &str) -> bool {
-    match native_module_kind(module) {
-        "math" => matches!(
-            name,
-            "abs" | "floor" | "ceil" | "round" | "min" | "max" | "random"
-        ),
-        "time" => matches!(name, "now_ms" | "now_sec"),
-        "json" => matches!(name, "stringify" | "parse"),
-        "yaml" => matches!(name, "stringify" | "parse"),
-        "toml" => matches!(name, "stringify" | "parse"),
-        "env" => matches!(name, "cwd" | "args" | "get" | "has"),
-        "io" => matches!(name, "print"),
-        "io.fs" => matches!(
-            name,
-            "exists"
-                | "is_file"
-                | "is_dir"
-                | "read_text"
-                | "write_text"
-                | "append_text"
-                | "list_dir"
-        ),
-        "os" => matches!(
-            name,
-            "name"
-                | "family"
-                | "arch"
-                | "pid"
-                | "cwd"
-                | "args"
-                | "exe_path"
-                | "get_env"
-                | "has_env"
-        ),
-        "net.http.client" => matches!(
-            name,
-            "get"
-                | "post"
-                | "put"
-                | "delete"
-                | "options"
-                | "stream_get"
-                | "stream_post"
-                | "stream_put"
-                | "stream_delete"
-                | "stream_options"
-        ),
-        "net.http.server" => matches!(name, "serve_once"),
-        "web.ino" => matches!(name, "App" | "create"),
-        _ => false,
-    }
-}
-
 fn canonical_module_path(path: &Path) -> Result<PathBuf, String> {
     let path = path
         .canonicalize()
@@ -3100,28 +3048,6 @@ fn canonical_module_path(path: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(path)
-}
-
-fn importable_native_module_name(source: &str) -> Option<&'static str> {
-    match source {
-        "std.math" => Some("std.math"),
-        "std.time" => Some("std.time"),
-        "std.json" => Some("std.json"),
-        "std.yaml" => Some("std.yaml"),
-        "std.toml" => Some("std.toml"),
-        "std.env" => Some("std.env"),
-        "std.io" => Some("std.io"),
-        "std.io.fs" => Some("std.io.fs"),
-        "std.os" => Some("std.os"),
-        "std.net.http.client" => Some("std.net.http.client"),
-        "std.net.http.server" => Some("std.net.http.server"),
-        "std.web.ino" => Some("std.web.ino"),
-        _ => None,
-    }
-}
-
-fn native_module_kind(module: &str) -> &str {
-    module.strip_prefix("std.").unwrap_or(module)
 }
 
 fn imported_member(module: &Value, name: &str, span: Span) -> IcooResult<Value> {
@@ -3136,7 +3062,7 @@ fn imported_member(module: &Value, name: &str, span: Span) -> IcooResult<Value> 
                 Some(span),
             )
         }),
-        Value::NativeModule(module) if has_native_module_method(&module.name, name) => {
+        Value::NativeModule(module) if native_modules::has_method(&module.name, name) => {
             Ok(Value::NativeModuleMethod(Rc::new(NativeModuleMethod {
                 module: module.name.clone(),
                 name: name.to_string(),

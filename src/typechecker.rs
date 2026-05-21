@@ -1,5 +1,6 @@
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::native_modules;
 use crate::parser::ast::*;
 use std::collections::HashMap;
 
@@ -872,21 +873,9 @@ fn common_type(left: &TypeInfo, right: &TypeInfo) -> TypeInfo {
 }
 
 fn import_module_type(source: &str) -> TypeInfo {
-    match source {
-        "std.math" => TypeInfo::known("Math"),
-        "std.time" => TypeInfo::known("Time"),
-        "std.json" => TypeInfo::known("Json"),
-        "std.yaml" => TypeInfo::known("Yaml"),
-        "std.toml" => TypeInfo::known("Toml"),
-        "std.env" => TypeInfo::known("Env"),
-        "std.io" => TypeInfo::known("Io"),
-        "std.io.fs" => TypeInfo::known("IoFs"),
-        "std.os" => TypeInfo::known("Os"),
-        "std.net.http.client" => TypeInfo::known("NetHttpClient"),
-        "std.net.http.server" => TypeInfo::known("NetHttpServer"),
-        "std.web.ino" => TypeInfo::known("WebIno"),
-        _ => TypeInfo::known("Module"),
-    }
+    native_modules::type_name(source)
+        .map(TypeInfo::known)
+        .unwrap_or_else(|| TypeInfo::known("Module"))
 }
 
 fn native_globals() -> HashMap<String, TypeInfo> {
