@@ -19,6 +19,8 @@ pub enum Value {
     Function(Rc<IcooFunction>),
     NativeFunction(Rc<NativeFunction>),
     NativeMethod(Rc<NativeMethod>),
+    NativeModule(Rc<NativeModule>),
+    NativeModuleMethod(Rc<NativeModuleMethod>),
     Coroutine(Rc<RefCell<IcooCoroutine>>),
     Task(Rc<RefCell<IcooTask>>),
     EventLoop(Rc<RefCell<IcooEventLoop>>),
@@ -51,7 +53,10 @@ impl Value {
             Value::Array(_) => "Array".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::Function(_) => "Function".to_string(),
-            Value::NativeFunction(_) | Value::NativeMethod(_) => "Function".to_string(),
+            Value::NativeFunction(_) | Value::NativeMethod(_) | Value::NativeModuleMethod(_) => {
+                "Function".to_string()
+            }
+            Value::NativeModule(module) => module.name.clone(),
             Value::Coroutine(_) => "Coroutine".to_string(),
             Value::Task(_) => "Task".to_string(),
             Value::EventLoop(_) => "EventLoop".to_string(),
@@ -89,6 +94,10 @@ impl Value {
             Value::Function(function) => format!("<fn {}>", function.decl.name.name),
             Value::NativeFunction(function) => format!("<native fn {}>", function.name),
             Value::NativeMethod(method) => format!("<native method {}>", method.name),
+            Value::NativeModule(module) => format!("<module {}>", module.name),
+            Value::NativeModuleMethod(method) => {
+                format!("<native fn {}.{}>", method.module, method.name)
+            }
             Value::Coroutine(coroutine) => format!("<coroutine {}>", coroutine.borrow().name),
             Value::Task(task) => format!("<task {}>", task.borrow().id),
             Value::EventLoop(loop_ref) => {
@@ -323,6 +332,29 @@ pub struct NativeMethod {
 impl fmt::Debug for NativeMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "<native method {}>", self.name)
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeModule {
+    pub name: String,
+}
+
+impl fmt::Debug for NativeModule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<module {}>", self.name)
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeModuleMethod {
+    pub module: String,
+    pub name: String,
+}
+
+impl fmt::Debug for NativeModuleMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<native fn {}.{}>", self.module, self.name)
     }
 }
 

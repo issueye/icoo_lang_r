@@ -449,3 +449,35 @@ let task: Task<Int> = loop.spawn(name())
     .unwrap_err();
     assert!(err.contains("type error: expected Task<Int> for binding 'task' but got Task<String>"));
 }
+
+#[test]
+fn supports_math_and_time_builtin_modules() {
+    let output = run(r#"
+print(math.max(1, 2).to_string())
+print(math.min(1, 2.5).to_string())
+print(math.floor(2.8).to_string())
+print(math.ceil(2.1).to_string())
+print(math.round(2.6).to_string())
+print(math.abs(-3).to_string())
+print((math.random() >= 0.0 and math.random() < 1.0).to_string())
+print((time.now_ms() > 0).to_string())
+print((time.now_sec() > 0).to_string())
+"#)
+    .unwrap();
+    assert_eq!(
+        output,
+        vec!["2", "1.0", "2", "3", "3", "3", "true", "true", "true"]
+    );
+
+    let err = run(r#"
+print(math.max("x", 2))
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected Number for argument 1 but got String"));
+
+    let err = run(r#"
+print(time.now_ms(1))
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: method expected 0 arguments but got 1"));
+}

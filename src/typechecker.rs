@@ -674,6 +674,9 @@ impl TypeChecker {
         let Some(expected_name) = expected.name() else {
             return true;
         };
+        if expected_name == "Number" && matches!(actual_name, "Int" | "Float") {
+            return true;
+        }
         if actual_name == expected_name {
             return true;
         }
@@ -840,6 +843,8 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("EventLoop", "Function"),
         ("current_loop", "Function"),
         ("sleep", "Function"),
+        ("math", "Math"),
+        ("time", "Time"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -893,6 +898,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Int", "abs") => Some(TypeInfo::known("Int")),
         ("Float", "to_int") => Some(TypeInfo::known("Int")),
         ("Float", "abs") => Some(TypeInfo::known("Float")),
+        ("Math", "floor" | "ceil" | "round") => Some(TypeInfo::known("Int")),
+        ("Math", "random") => Some(TypeInfo::known("Float")),
+        ("Math", "abs" | "min" | "max") => Some(TypeInfo::Unknown),
+        ("Time", "now_ms" | "now_sec") => Some(TypeInfo::known("Int")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -970,6 +979,9 @@ fn native_method_sig(
         | ("Int", "abs")
         | ("Float", "to_int")
         | ("Float", "abs")
+        | ("Math", "random")
+        | ("Time", "now_ms")
+        | ("Time", "now_sec")
         | ("EventLoop", "run")
         | ("EventLoop", "stop")
         | ("EventLoop", "is_stopped")
@@ -987,6 +999,18 @@ fn native_method_sig(
         | ("Map", "keys")
         | ("Map", "values")
         | ("Map", "entries") => Some(native_sig(NativeArity::Exact(0), vec![], None, return_type)),
+        ("Math", "abs" | "floor" | "ceil" | "round") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Number")],
+            None,
+            return_type,
+        )),
+        ("Math", "min" | "max") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("Number"), Some("Number")],
+            None,
+            return_type,
+        )),
         ("EventLoop", "spawn") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Coroutine")],

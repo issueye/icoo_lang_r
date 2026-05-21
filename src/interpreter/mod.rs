@@ -6,7 +6,7 @@ use crate::runtime::value::*;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub struct Interpreter {
     env: EnvRef,
@@ -65,6 +65,16 @@ impl Interpreter {
                 Value::NativeFunction(Rc::new(NativeFunction {
                     name: name.to_string(),
                     arity,
+                })),
+                true,
+                BindingKind::Const,
+            );
+        }
+        for name in ["math", "time"] {
+            self.env.borrow_mut().define(
+                name.to_string(),
+                Value::NativeModule(Rc::new(NativeModule {
+                    name: name.to_string(),
                 })),
                 true,
                 BindingKind::Const,
@@ -433,6 +443,14 @@ impl Interpreter {
     }
 
     fn get_property(&mut self, object: Value, name: &str, span: Span) -> IcooResult<Value> {
+        if let Value::NativeModule(module) = &object {
+            if has_native_module_method(&module.name, name) {
+                return Ok(Value::NativeModuleMethod(Rc::new(NativeModuleMethod {
+                    module: module.name.clone(),
+                    name: name.to_string(),
+                })));
+            }
+        }
         if let Value::Instance(instance) = &object {
             let field = instance.borrow().fields.get(name).cloned();
             if let Some(field) = field {
@@ -529,6 +547,9 @@ impl Interpreter {
             Value::Function(function) => self.call_function(function, args, span),
             Value::NativeFunction(function) => self.call_native_function(&function, args, span),
             Value::NativeMethod(method) => self.call_native_method(&method, args, span),
+            Value::NativeModuleMethod(method) => {
+                self.call_native_module_method(&method, args, span)
+            }
             Value::Class(class) => self.call_class(class, args, span),
             _ => Err(IcooError::runtime(
                 format!("type '{}' is not callable", callee.type_name()),
@@ -889,8 +910,69 @@ impl Interpreter {
             | Value::Nil
             | Value::Function(_)
             | Value::Coroutine(_)
-            | Value::Class(_) => true,
-            Value::NativeFunction(_) | Value::NativeMethod(_) => true,
+            | Value::Class(_)
+            | Value::NativeModule(_) => true,
+            Value::NativeFunction(_) | Value::NativeMethod(_) | Value::NativeModuleMethod(_) => {
+                true
+            }
+        }
+    }
+
+    fn call_native_module_method(
+        &mut self,
+        method: &NativeModuleMethod,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match (method.module.as_str(), method.name.as_str()) {
+            ("math", "abs") => {
+                expect_arity(&args, 1, span)?;
+                match &args[0] {
+                    Value::Int(value) => Ok(Value::Int(value.abs())),
+                    Value::Float(value) => Ok(Value::Float(value.abs())),
+                    _ => Err(IcooError::runtime("expected numeric argument", Some(span))),
+                }
+            }
+            ("math", "floor") => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Int(expect_number(&args[0], span)?.floor() as i64))
+            }
+            ("math", "ceil") => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Int(expect_number(&args[0], span)?.ceil() as i64))
+            }
+            ("math", "round") => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Int(expect_number(&args[0], span)?.round() as i64))
+            }
+            ("math", "min") => {
+                expect_arity(&args, 2, span)?;
+                numeric_min_max(&args[0], &args[1], span, f64::min)
+            }
+            ("math", "max") => {
+                expect_arity(&args, 2, span)?;
+                numeric_min_max(&args[0], &args[1], span, f64::max)
+            }
+            ("math", "random") => {
+                expect_arity(&args, 0, span)?;
+                let nanos = now_duration(span)?.subsec_nanos();
+                Ok(Value::Float((nanos as f64) / 1_000_000_000.0))
+            }
+            ("time", "now_ms") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(now_duration(span)?.as_millis() as i64))
+            }
+            ("time", "now_sec") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(now_duration(span)?.as_secs() as i64))
+            }
+            _ => Err(IcooError::runtime(
+                format!(
+                    "unknown native module method '{}.{}'",
+                    method.module, method.name
+                ),
+                Some(span),
+            )),
         }
     }
 
@@ -1943,6 +2025,48 @@ fn expect_int(value: &Value, span: Span) -> IcooResult<i64> {
     match value {
         Value::Int(value) => Ok(*value),
         _ => Err(IcooError::runtime("expected Int argument", Some(span))),
+    }
+}
+
+fn expect_number(value: &Value, span: Span) -> IcooResult<f64> {
+    match value {
+        Value::Int(value) => Ok(*value as f64),
+        Value::Float(value) => Ok(*value),
+        _ => Err(IcooError::runtime("expected numeric argument", Some(span))),
+    }
+}
+
+fn numeric_min_max(
+    left: &Value,
+    right: &Value,
+    span: Span,
+    op: impl Fn(f64, f64) -> f64,
+) -> IcooResult<Value> {
+    match (left, right) {
+        (Value::Int(left), Value::Int(right)) => {
+            Ok(Value::Int(op(*left as f64, *right as f64) as i64))
+        }
+        _ => Ok(Value::Float(op(
+            expect_number(left, span)?,
+            expect_number(right, span)?,
+        ))),
+    }
+}
+
+fn now_duration(span: Span) -> IcooResult<Duration> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| IcooError::runtime(format!("system time error: {}", err), Some(span)))
+}
+
+fn has_native_module_method(module: &str, name: &str) -> bool {
+    match module {
+        "math" => matches!(
+            name,
+            "abs" | "floor" | "ceil" | "round" | "min" | "max" | "random"
+        ),
+        "time" => matches!(name, "now_ms" | "now_sec"),
+        _ => false,
     }
 }
 

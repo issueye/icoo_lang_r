@@ -84,6 +84,7 @@ Nil
 Bool
 Int
 Float
+Number  # 仅用于类型检查，表示 Int 或 Float
 String
 Array
 Map
@@ -1245,6 +1246,32 @@ is_coroutine(value)
 is_task(value)
 current_loop()
 sleep(ms: Int) -> Task
+```
+
+第一版内置模块直接注册为全局常量，不依赖 `import`：
+
+```text
+math
+time
+```
+
+`math` 模块：
+
+```text
+math.abs(value: Number) -> Number
+math.floor(value: Number) -> Int
+math.ceil(value: Number) -> Int
+math.round(value: Number) -> Int
+math.min(left: Number, right: Number) -> Number
+math.max(left: Number, right: Number) -> Number
+math.random() -> Float
+```
+
+`time` 模块：
+
+```text
+time.now_ms() -> Int
+time.now_sec() -> Int
 ```
 
 事件循环对象方法：
