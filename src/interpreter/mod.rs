@@ -69,6 +69,10 @@ impl Interpreter {
         install_natives_into(&self.env);
     }
 
+    pub(crate) fn emit_output(&mut self, value: String) {
+        (self.output)(value);
+    }
+
     fn load_import_value(&mut self, source: &str, span: Span) -> IcooResult<Value> {
         if let Some(module_name) = native_modules::import_path(source) {
             return Ok(Value::NativeModule(Rc::new(NativeModule {
@@ -1125,320 +1129,16 @@ impl Interpreter {
         args: Vec<Value>,
         span: Span,
     ) -> IcooResult<Value> {
-        match (native_modules::kind(&method.module), method.name.as_str()) {
-            ("math", "abs") => {
-                expect_arity(&args, 1, span)?;
-                match &args[0] {
-                    Value::Int(value) => Ok(Value::Int(value.abs())),
-                    Value::Float(value) => Ok(Value::Float(value.abs())),
-                    _ => Err(IcooError::runtime("expected numeric argument", Some(span))),
-                }
-            }
-            ("math", "floor") => {
-                expect_arity(&args, 1, span)?;
-                Ok(Value::Int(expect_number(&args[0], span)?.floor() as i64))
-            }
-            ("math", "ceil") => {
-                expect_arity(&args, 1, span)?;
-                Ok(Value::Int(expect_number(&args[0], span)?.ceil() as i64))
-            }
-            ("math", "round") => {
-                expect_arity(&args, 1, span)?;
-                Ok(Value::Int(expect_number(&args[0], span)?.round() as i64))
-            }
-            ("math", "min") => {
-                expect_arity(&args, 2, span)?;
-                numeric_min_max(&args[0], &args[1], span, f64::min)
-            }
-            ("math", "max") => {
-                expect_arity(&args, 2, span)?;
-                numeric_min_max(&args[0], &args[1], span, f64::max)
-            }
-            ("math", "random") => {
-                expect_arity(&args, 0, span)?;
-                let nanos = now_duration(span)?.subsec_nanos();
-                Ok(Value::Float((nanos as f64) / 1_000_000_000.0))
-            }
-            ("time", "now_ms") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::Int(now_duration(span)?.as_millis() as i64))
-            }
-            ("time", "now_sec") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::Int(now_duration(span)?.as_secs() as i64))
-            }
-            ("json", "stringify") => {
-                expect_arity(&args, 1, span)?;
-                serde_json::to_string(&value_to_json(&args[0], span)?)
-                    .map(Value::String)
-                    .map_err(|err| {
-                        IcooError::runtime(format!("json.stringify() failed: {}", err), Some(span))
-                    })
-            }
-            ("json", "parse") => {
-                expect_arity(&args, 1, span)?;
-                let text = expect_string(&args[0], span)?;
-                let parsed = serde_json::from_str::<serde_json::Value>(&text).map_err(|err| {
-                    IcooError::runtime(format!("json.parse() failed: {}", err), Some(span))
-                })?;
-                json_to_value(parsed, span)
-            }
-            ("yaml", "stringify") => {
-                expect_arity(&args, 1, span)?;
-                serde_yml::to_string(&value_to_json(&args[0], span)?)
-                    .map(Value::String)
-                    .map_err(|err| {
-                        IcooError::runtime(format!("yaml.stringify() failed: {}", err), Some(span))
-                    })
-            }
-            ("yaml", "parse") => {
-                expect_arity(&args, 1, span)?;
-                let text = expect_string(&args[0], span)?;
-                let parsed = serde_yml::from_str::<serde_json::Value>(&text).map_err(|err| {
-                    IcooError::runtime(format!("yaml.parse() failed: {}", err), Some(span))
-                })?;
-                json_to_value(parsed, span)
-            }
-            ("toml", "stringify") => {
-                expect_arity(&args, 1, span)?;
-                toml::to_string(&value_to_toml(&args[0], span)?)
-                    .map(Value::String)
-                    .map_err(|err| {
-                        IcooError::runtime(format!("toml.stringify() failed: {}", err), Some(span))
-                    })
-            }
-            ("toml", "parse") => {
-                expect_arity(&args, 1, span)?;
-                let text = expect_string(&args[0], span)?;
-                let parsed = toml::from_str::<toml::Value>(&text).map_err(|err| {
-                    IcooError::runtime(format!("toml.parse() failed: {}", err), Some(span))
-                })?;
-                toml_to_value(parsed, span)
-            }
-            ("env", "cwd") => {
-                expect_arity(&args, 0, span)?;
-                std::env::current_dir()
-                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
-                    .map_err(|err| {
-                        IcooError::runtime(format!("env.cwd() failed: {}", err), Some(span))
-                    })
-            }
-            ("env", "args") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::Array(Rc::new(RefCell::new(
-                    std::env::args().map(Value::String).collect(),
-                ))))
-            }
-            ("env", "get") => {
-                expect_arity(&args, 1, span)?;
-                let name = expect_string(&args[0], span)?;
-                Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
-            }
-            ("env", "has") => {
-                expect_arity(&args, 1, span)?;
-                let name = expect_string(&args[0], span)?;
-                Ok(Value::Bool(std::env::var_os(name).is_some()))
-            }
-            ("io", "print") => {
-                expect_arity(&args, 1, span)?;
-                (self.output)(args[0].display());
-                Ok(Value::Nil)
-            }
-            ("io.fs", "exists") => {
-                expect_arity(&args, 1, span)?;
-                let path = expect_string(&args[0], span)?;
-                Ok(Value::Bool(std::path::Path::new(&path).exists()))
-            }
-            ("io.fs", "is_file") => {
-                expect_arity(&args, 1, span)?;
-                let path = expect_string(&args[0], span)?;
-                Ok(Value::Bool(std::path::Path::new(&path).is_file()))
-            }
-            ("io.fs", "is_dir") => {
-                expect_arity(&args, 1, span)?;
-                let path = expect_string(&args[0], span)?;
-                Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
-            }
-            ("io.fs", "read_text") => {
-                expect_arity(&args, 1, span)?;
-                let path = expect_string(&args[0], span)?;
-                std::fs::read_to_string(&path)
-                    .map(Value::String)
-                    .map_err(|err| {
-                        IcooError::runtime(format!("io.fs.read_text() failed: {}", err), Some(span))
-                    })
-            }
-            ("io.fs", "write_text") => {
-                expect_arity(&args, 2, span)?;
-                let path = expect_string(&args[0], span)?;
-                let content = expect_string(&args[1], span)?;
-                std::fs::write(&path, content)
-                    .map(|_| Value::Nil)
-                    .map_err(|err| {
-                        IcooError::runtime(
-                            format!("io.fs.write_text() failed: {}", err),
-                            Some(span),
-                        )
-                    })
-            }
-            ("io.fs", "append_text") => {
-                expect_arity(&args, 2, span)?;
-                let path = expect_string(&args[0], span)?;
-                let content = expect_string(&args[1], span)?;
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .and_then(|mut file| {
-                        use std::io::Write;
-                        file.write_all(content.as_bytes())
-                    })
-                    .map(|_| Value::Nil)
-                    .map_err(|err| {
-                        IcooError::runtime(
-                            format!("io.fs.append_text() failed: {}", err),
-                            Some(span),
-                        )
-                    })
-            }
-            ("io.fs", "list_dir") => {
-                expect_arity(&args, 1, span)?;
-                let path = expect_string(&args[0], span)?;
-                let mut entries = Vec::new();
-                for entry in std::fs::read_dir(&path).map_err(|err| {
-                    IcooError::runtime(format!("io.fs.list_dir() failed: {}", err), Some(span))
-                })? {
-                    let entry = entry.map_err(|err| {
-                        IcooError::runtime(format!("io.fs.list_dir() failed: {}", err), Some(span))
-                    })?;
-                    entries.push(Value::String(
-                        entry.file_name().to_string_lossy().into_owned(),
-                    ));
-                }
-                entries.sort_by_key(Value::display);
-                Ok(Value::Array(Rc::new(RefCell::new(entries))))
-            }
-            ("os", "name") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::String(std::env::consts::OS.to_string()))
-            }
-            ("os", "family") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::String(std::env::consts::FAMILY.to_string()))
-            }
-            ("os", "arch") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::String(std::env::consts::ARCH.to_string()))
-            }
-            ("os", "pid") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::Int(std::process::id() as i64))
-            }
-            ("os", "cwd") => {
-                expect_arity(&args, 0, span)?;
-                std::env::current_dir()
-                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
-                    .map_err(|err| {
-                        IcooError::runtime(format!("os.cwd() failed: {}", err), Some(span))
-                    })
-            }
-            ("os", "args") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::Array(Rc::new(RefCell::new(
-                    std::env::args().map(Value::String).collect(),
-                ))))
-            }
-            ("os", "exe_path") => {
-                expect_arity(&args, 0, span)?;
-                Ok(std::env::current_exe()
-                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
-                    .unwrap_or(Value::Nil))
-            }
-            ("os", "get_env") => {
-                expect_arity(&args, 1, span)?;
-                let name = expect_string(&args[0], span)?;
-                Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
-            }
-            ("os", "has_env") => {
-                expect_arity(&args, 1, span)?;
-                let name = expect_string(&args[0], span)?;
-                Ok(Value::Bool(std::env::var_os(name).is_some()))
-            }
-            ("net.http.client", "get") => {
-                expect_arity(&args, 1, span)?;
-                let url = expect_string(&args[0], span)?;
-                http_client_request("GET", &url, "", span)
-            }
-            ("net.http.client", "post" | "put") => {
-                expect_arity(&args, 2, span)?;
-                let url = expect_string(&args[0], span)?;
-                let body = expect_string(&args[1], span)?;
-                http_client_request(&method.name.to_ascii_uppercase(), &url, &body, span)
-            }
-            ("net.http.client", "delete" | "options") => {
-                expect_arity(&args, 1, span)?;
-                let url = expect_string(&args[0], span)?;
-                http_client_request(&method.name.to_ascii_uppercase(), &url, "", span)
-            }
-            ("net.http.client", "stream_get") => {
-                expect_arity(&args, 2, span)?;
-                let url = expect_string(&args[0], span)?;
-                let handler = args[1].clone();
-                self.http_client_stream_request("GET", &url, "", handler, span)
-            }
-            ("net.http.client", "stream_post" | "stream_put") => {
-                expect_arity(&args, 3, span)?;
-                let url = expect_string(&args[0], span)?;
-                let body = expect_string(&args[1], span)?;
-                let handler = args[2].clone();
-                self.http_client_stream_request(
-                    http_stream_method_name(&method.name),
-                    &url,
-                    &body,
-                    handler,
-                    span,
-                )
-            }
-            ("net.http.client", "stream_delete" | "stream_options") => {
-                expect_arity(&args, 2, span)?;
-                let url = expect_string(&args[0], span)?;
-                let handler = args[1].clone();
-                self.http_client_stream_request(
-                    http_stream_method_name(&method.name),
-                    &url,
-                    "",
-                    handler,
-                    span,
-                )
-            }
-            ("net.http.server", "serve_once") => {
-                expect_arity(&args, 3, span)?;
-                let host = expect_string(&args[0], span)?;
-                let port = expect_int(&args[1], span)?;
-                if !(1..=65535).contains(&port) {
-                    return Err(IcooError::runtime(
-                        "server port must be between 1 and 65535",
-                        Some(span),
-                    ));
-                }
-                let body = expect_string(&args[2], span)?;
-                http_server_serve_once(&host, port as u16, &body, span)?;
-                Ok(Value::Nil)
-            }
-            ("web.ino", "App") | ("web.ino", "create") => {
-                expect_arity(&args, 0, span)?;
-                Ok(Value::WebInoApp(Rc::new(RefCell::new(WebInoApp {
-                    routes: HashMap::new(),
-                }))))
-            }
-            _ => Err(IcooError::runtime(
+        let kind = native_modules::kind(&method.module);
+        native_modules::call(self, kind, &method.name, args, span).unwrap_or_else(|| {
+            Err(IcooError::runtime(
                 format!(
                     "unknown native module method '{}.{}'",
                     method.module, method.name
                 ),
                 Some(span),
-            )),
-        }
+            ))
+        })
     }
 
     fn call_native_method(
@@ -1496,7 +1196,7 @@ impl Interpreter {
         }
     }
 
-    fn http_client_stream_request(
+    pub(crate) fn http_client_stream_request(
         &mut self,
         method: &str,
         url: &str,
@@ -2971,7 +2671,7 @@ fn value_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
-fn expect_arity(args: &[Value], expected: usize, span: Span) -> IcooResult<()> {
+pub(crate) fn expect_arity(args: &[Value], expected: usize, span: Span) -> IcooResult<()> {
     if args.len() == expected {
         Ok(())
     } else {
@@ -2992,21 +2692,21 @@ fn arity_error(name: &str, expected: &str, got: usize, span: Span) -> IcooError 
     )
 }
 
-fn expect_string(value: &Value, span: Span) -> IcooResult<String> {
+pub(crate) fn expect_string(value: &Value, span: Span) -> IcooResult<String> {
     match value {
         Value::String(value) => Ok(value.clone()),
         _ => Err(IcooError::runtime("expected String argument", Some(span))),
     }
 }
 
-fn expect_int(value: &Value, span: Span) -> IcooResult<i64> {
+pub(crate) fn expect_int(value: &Value, span: Span) -> IcooResult<i64> {
     match value {
         Value::Int(value) => Ok(*value),
         _ => Err(IcooError::runtime("expected Int argument", Some(span))),
     }
 }
 
-fn expect_number(value: &Value, span: Span) -> IcooResult<f64> {
+pub(crate) fn expect_number(value: &Value, span: Span) -> IcooResult<f64> {
     match value {
         Value::Int(value) => Ok(*value as f64),
         Value::Float(value) => Ok(*value),
@@ -3014,7 +2714,7 @@ fn expect_number(value: &Value, span: Span) -> IcooResult<f64> {
     }
 }
 
-fn numeric_min_max(
+pub(crate) fn numeric_min_max(
     left: &Value,
     right: &Value,
     span: Span,
@@ -3031,7 +2731,7 @@ fn numeric_min_max(
     }
 }
 
-fn now_duration(span: Span) -> IcooResult<Duration> {
+pub(crate) fn now_duration(span: Span) -> IcooResult<Duration> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| IcooError::runtime(format!("system time error: {}", err), Some(span)))
@@ -3169,7 +2869,7 @@ fn http_method_has_request_body(method: &str) -> bool {
     matches!(method, "POST" | "PUT")
 }
 
-fn http_stream_method_name(method_name: &str) -> &'static str {
+pub(crate) fn http_stream_method_name(method_name: &str) -> &'static str {
     match method_name {
         "stream_get" => "GET",
         "stream_post" => "POST",
@@ -3180,7 +2880,12 @@ fn http_stream_method_name(method_name: &str) -> &'static str {
     }
 }
 
-fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooResult<Value> {
+pub(crate) fn http_client_request(
+    method: &str,
+    url: &str,
+    body: &str,
+    span: Span,
+) -> IcooResult<Value> {
     let mut stream = open_http_client_request(method, url, body, span)?;
     let mut response = String::new();
     std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
@@ -3479,7 +3184,12 @@ fn read_more_http_stream_bytes(
     Ok(())
 }
 
-fn http_server_serve_once(host: &str, port: u16, body: &str, span: Span) -> IcooResult<()> {
+pub(crate) fn http_server_serve_once(
+    host: &str,
+    port: u16,
+    body: &str,
+    span: Span,
+) -> IcooResult<()> {
     let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
         IcooError::runtime(format!("http server bind failed: {}", err), Some(span))
     })?;
@@ -3882,7 +3592,7 @@ fn http_status_text(status: i64) -> &'static str {
     }
 }
 
-fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {
+pub(crate) fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {
     match value {
         Value::Nil => Ok(serde_json::Value::Null),
         Value::Bool(value) => Ok(serde_json::Value::Bool(*value)),
@@ -3914,7 +3624,7 @@ fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {
     }
 }
 
-fn json_to_value(value: serde_json::Value, span: Span) -> IcooResult<Value> {
+pub(crate) fn json_to_value(value: serde_json::Value, span: Span) -> IcooResult<Value> {
     match value {
         serde_json::Value::Null => Ok(Value::Nil),
         serde_json::Value::Bool(value) => Ok(Value::Bool(value)),
@@ -3946,7 +3656,7 @@ fn json_to_value(value: serde_json::Value, span: Span) -> IcooResult<Value> {
     }
 }
 
-fn value_to_toml(value: &Value, span: Span) -> IcooResult<toml::Value> {
+pub(crate) fn value_to_toml(value: &Value, span: Span) -> IcooResult<toml::Value> {
     match value {
         Value::Bool(value) => Ok(toml::Value::Boolean(*value)),
         Value::Int(value) => Ok(toml::Value::Integer(*value)),
@@ -3981,7 +3691,7 @@ fn value_to_toml(value: &Value, span: Span) -> IcooResult<toml::Value> {
     }
 }
 
-fn toml_to_value(value: toml::Value, span: Span) -> IcooResult<Value> {
+pub(crate) fn toml_to_value(value: toml::Value, span: Span) -> IcooResult<Value> {
     match value {
         toml::Value::String(value) => Ok(Value::String(value)),
         toml::Value::Integer(value) => Ok(Value::Int(value)),

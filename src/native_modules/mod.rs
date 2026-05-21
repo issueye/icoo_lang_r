@@ -1,15 +1,20 @@
-mod env;
-mod io;
-mod io_fs;
-mod json;
-mod math;
-mod net_http_client;
-mod net_http_server;
-mod os;
-mod time;
-mod toml;
-mod web_ino;
-mod yaml;
+pub(crate) mod env;
+pub(crate) mod io;
+pub(crate) mod io_fs;
+pub(crate) mod json;
+pub(crate) mod math;
+pub(crate) mod net_http_client;
+pub(crate) mod net_http_server;
+pub(crate) mod os;
+pub(crate) mod time;
+pub(crate) mod toml;
+pub(crate) mod web_ino;
+pub(crate) mod yaml;
+
+use crate::error::IcooResult;
+use crate::interpreter::Interpreter;
+use crate::lexer::token::Span;
+use crate::runtime::value::Value;
 
 pub struct NativeModuleSpec {
     pub import_path: &'static str,
@@ -62,4 +67,28 @@ pub fn has_method(module: &str, name: &str) -> bool {
         .find(|spec| spec.kind == kind)
         .map(|spec| spec.methods.contains(&name))
         .unwrap_or(false)
+}
+
+pub(crate) fn call(
+    runtime: &mut Interpreter,
+    kind: &str,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> Option<IcooResult<Value>> {
+    match kind {
+        "math" => math::call(name, args, span),
+        "time" => time::call(name, args, span),
+        "json" => json::call(name, args, span),
+        "yaml" => yaml::call(name, args, span),
+        "toml" => toml::call(name, args, span),
+        "env" => env::call(name, args, span),
+        "io" => io::call(runtime, name, args, span),
+        "io.fs" => io_fs::call(name, args, span),
+        "os" => os::call(name, args, span),
+        "net.http.client" => net_http_client::call(runtime, name, args, span),
+        "net.http.server" => net_http_server::call(name, args, span),
+        "web.ino" => web_ino::call(name, args, span),
+        _ => None,
+    }
 }
