@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::fs;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::thread;
@@ -1032,4 +1033,109 @@ app.listen_with_workers("127.0.0.1", 1, 1, 0)
 "#)
     .unwrap_err();
     assert!(err.contains("workers must be positive"));
+}
+
+#[test]
+fn supports_std_web_ino_file_uploads() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_upload");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn upload(req: Map<String, Any>, res: WebInoResponse):
+    let form = req.get("form")
+    let files = req.get("files")
+    let file = files.get("avatar")
+    res.json({{"title": form.get("title"), "filename": file.get("filename"), "content_type": file.get("content_type"), "content": file.get("content"), "size": file.get("size")}})
+
+app.post("/upload", upload)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let boundary = "ICOOTESTBOUNDARY";
+    let body = format!(
+        "--{0}\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nprofile\r\n--{0}\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"avatar.txt\"\r\nContent-Type: text/plain\r\n\r\nhello upload\r\n--{0}--\r\n",
+        boundary
+    );
+    let request = format!(
+        "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={}\r\nContent-Length: {}\r\n\r\n{}",
+        boundary,
+        body.as_bytes().len(),
+        body
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(r#""title":"profile""#));
+    assert!(response.contains(r#""filename":"avatar.txt""#));
+    assert!(response.contains(r#""content_type":"text/plain""#));
+    assert!(response.contains(r#""content":"hello upload""#));
+    assert!(response.contains(r#""size":12"#));
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn supports_std_web_ino_streaming_responses() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_stream");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn stream(req: Map<String, Any>, res: WebInoResponse):
+    res.write("hello")
+    res.write(" ")
+    res.write(req.get("path"))
+    res.end()
+
+app.get("/stream", stream)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_path = dir.join("client.icoo");
+    fs::write(
+        &client_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+let response = client.get("http://127.0.0.1:{}/stream")
+print(response.get("headers").get("transfer-encoding"))
+print(response.get("body"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let output = run_file(client_path).unwrap();
+    assert_eq!(output, vec!["chunked", "hello /stream"]);
+    server_handle.join().unwrap().unwrap();
 }

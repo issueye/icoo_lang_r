@@ -1405,6 +1405,8 @@ app.listen_with_workers(host: String, port: Int, max_requests: Int, workers: Int
 res.status(code: Int) -> WebInoResponse
 res.send(value: Any) -> Nil
 res.json(value: Any) -> Nil
+res.write(value: Any) -> WebInoResponse
+res.end() -> Nil
 ```
 
 `std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。第一版使用精确路径匹配，handler 接收两个参数：
@@ -1415,7 +1417,25 @@ fn home(req: Map<String, Any>, res: WebInoResponse):
     res.send("hello " + req.get("path"))
 ```
 
-`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`。`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
+`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`、`form`、`files`。普通请求体保留在 `body`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`size`。当前上传内容以字符串形式进入运行时，适合配置、文本、小文件和 MVP 验证；二进制文件落盘、临时文件、上传大小限制和流式读取会在后续版本继续扩展。
+
+```python
+fn upload(req: Map<String, Any>, res: WebInoResponse):
+    let file = req.get("files").get("avatar")
+    res.json({"filename": file.get("filename"), "size": file.get("size")})
+```
+
+`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`res.write` 会启动 `Transfer-Encoding: chunked` 的流式响应并立即写出 chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.send` 或 `res.json` 修改已经写出的响应头和主体。
+
+```python
+fn stream(req: Map<String, Any>, res: WebInoResponse):
+    res.write("hello")
+    res.write(" ")
+    res.write(req.get("path"))
+    res.end()
+```
+
+`listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
 
 `listen` 会并发接收和读取最多 `max_requests` 个连接，适合验证多个客户端同时连接的服务行为。内部使用固定 reader worker 池，默认 worker 数取当前机器可用并行度，避免每个请求都创建新线程。路由表按 `METHOD path` 建立哈希索引，避免路由数量增加时逐条扫描。`listen_with_workers` 允许显式传入 worker 数，用于压测调参。当前解释器中的 Icoo handler 仍在解释器线程内逐个执行，因为用户函数闭包和运行时环境还不是线程安全对象；后续可以在运行时对象可安全跨线程后扩展为真正的并发 handler、长生命周期服务、中间件、路径参数、路由组、错误处理和 async handler。
 

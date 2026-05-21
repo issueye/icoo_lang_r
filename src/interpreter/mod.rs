@@ -1088,7 +1088,9 @@ impl Interpreter {
                     "get" | "post" | "listen_once" | "listen" | "listen_with_workers"
                 )
             }
-            Value::WebInoResponse(_) => matches!(name, "status" | "send" | "json"),
+            Value::WebInoResponse(_) => {
+                matches!(name, "status" | "send" | "json" | "write" | "end")
+            }
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
             Value::Bool(_) => matches!(name, "to_int"),
             Value::Int(_) => matches!(name, "to_float" | "abs"),
@@ -1576,15 +1578,32 @@ impl Interpreter {
                         Some(span),
                     ));
                 }
-                response.borrow_mut().status = status;
+                {
+                    let mut response_ref = response.borrow_mut();
+                    if response_ref.headers_sent {
+                        return Err(IcooError::runtime(
+                            "cannot change HTTP status after streaming has started",
+                            Some(span),
+                        ));
+                    }
+                    response_ref.status = status;
+                }
                 Ok(Value::WebInoResponse(response))
             }
             "send" => {
                 expect_arity(&args, 1, span)?;
                 let mut response_ref = response.borrow_mut();
+                if response_ref.headers_sent {
+                    return Err(IcooError::runtime(
+                        "cannot send response after streaming has started",
+                        Some(span),
+                    ));
+                }
                 response_ref.body = args[0].display();
+                response_ref.chunks.clear();
                 response_ref.content_type = "text/plain; charset=utf-8".to_string();
                 response_ref.sent = true;
+                response_ref.streaming = false;
                 Ok(Value::Nil)
             }
             "json" => {
@@ -1597,9 +1616,35 @@ impl Interpreter {
                         )
                     })?;
                 let mut response_ref = response.borrow_mut();
+                if response_ref.headers_sent {
+                    return Err(IcooError::runtime(
+                        "cannot send JSON response after streaming has started",
+                        Some(span),
+                    ));
+                }
                 response_ref.body = body;
+                response_ref.chunks.clear();
                 response_ref.content_type = "application/json; charset=utf-8".to_string();
                 response_ref.sent = true;
+                response_ref.streaming = false;
+                Ok(Value::Nil)
+            }
+            "write" => {
+                expect_arity(&args, 1, span)?;
+                {
+                    let mut response_ref = response.borrow_mut();
+                    web_ino_write_stream_chunk(&mut response_ref, args[0].display(), span)?;
+                }
+                Ok(Value::WebInoResponse(response))
+            }
+            "end" => {
+                expect_arity(&args, 0, span)?;
+                let mut response_ref = response.borrow_mut();
+                if response_ref.streaming {
+                    web_ino_end_stream(&mut response_ref, span)?;
+                } else {
+                    response_ref.sent = true;
+                }
                 Ok(Value::Nil)
             }
             _ => Err(IcooError::runtime(
@@ -1628,16 +1673,8 @@ impl Interpreter {
                 Some(span),
             )
         })?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|err| {
-                IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
-            })?;
-        let mut buffer = [0_u8; 8192];
-        let size = std::io::Read::read(&mut stream, &mut buffer).map_err(|err| {
-            IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
-        })?;
-        let request_text = String::from_utf8_lossy(&buffer[..size]).into_owned();
+        let request_text = read_web_ino_request_text(&mut stream)
+            .map_err(|message| IcooError::runtime(message, Some(span)))?;
         self.web_ino_handle_request(app, &request_text, &mut stream, span)
     }
 
@@ -1694,12 +1731,7 @@ impl Interpreter {
                 let request = stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .map_err(|err| format!("web.ino request read failed: {}", err))
-                    .and_then(|_| {
-                        let mut buffer = [0_u8; 8192];
-                        std::io::Read::read(&mut stream, &mut buffer)
-                            .map(|size| String::from_utf8_lossy(&buffer[..size]).into_owned())
-                            .map_err(|err| format!("web.ino request read failed: {}", err))
-                    });
+                    .and_then(|_| read_web_ino_request_text(&mut stream));
                 let _ = result_tx.send(WebInoAccepted::Request { request, stream });
             }));
         }
@@ -1720,8 +1752,13 @@ impl Interpreter {
                     let response = WebInoResponse {
                         status: 400,
                         body: message,
+                        chunks: Vec::new(),
                         content_type: "text/plain; charset=utf-8".to_string(),
                         sent: true,
+                        streaming: false,
+                        headers_sent: false,
+                        stream_ended: false,
+                        writer: None,
                     };
                     let response_text = web_ino_http_response(&response);
                     std::io::Write::write_all(&mut stream, response_text.as_bytes()).map_err(
@@ -1763,11 +1800,22 @@ impl Interpreter {
             .routes
             .get(&web_ino_route_key(&request.method, &request.path))
             .cloned();
+        let writer = stream.try_clone().map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino response stream clone failed: {}", err),
+                Some(span),
+            )
+        })?;
         let response = Rc::new(RefCell::new(WebInoResponse {
             status: 200,
             body: String::new(),
+            chunks: Vec::new(),
             content_type: "text/plain; charset=utf-8".to_string(),
             sent: false,
+            streaming: false,
+            headers_sent: false,
+            stream_ended: false,
+            writer: Some(Rc::new(RefCell::new(writer))),
         }));
         if let Some(route) = route {
             let result = self.call_value(
@@ -1788,6 +1836,11 @@ impl Interpreter {
             response_ref.status = 404;
             response_ref.body = "Not Found".to_string();
             response_ref.sent = true;
+        }
+        if response.borrow().streaming && response.borrow().headers_sent {
+            let mut response_ref = response.borrow_mut();
+            web_ino_end_stream(&mut response_ref, span)?;
+            return Ok(());
         }
         let response_text = web_ino_http_response(&response.borrow());
         std::io::Write::write_all(stream, response_text.as_bytes()).map_err(|err| {
@@ -3053,14 +3106,68 @@ fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
             );
         }
     }
+    let body = if matches!(
+        headers.get("transfer-encoding"),
+        Some(Value::String(value)) if value.eq_ignore_ascii_case("chunked")
+    ) {
+        decode_chunked_body(body, span)?
+    } else {
+        body.to_string()
+    };
     let mut result = HashMap::new();
     result.insert("status".to_string(), Value::Int(status));
-    result.insert("body".to_string(), Value::String(body.to_string()));
+    result.insert("body".to_string(), Value::String(body));
     result.insert(
         "headers".to_string(),
         Value::Map(Rc::new(RefCell::new(headers))),
     );
     Ok(Value::Map(Rc::new(RefCell::new(result))))
+}
+
+fn decode_chunked_body(body: &str, span: Span) -> IcooResult<String> {
+    let bytes = body.as_bytes();
+    let mut index = 0;
+    let mut decoded = Vec::new();
+    loop {
+        let Some(line_end) = find_crlf(bytes, index) else {
+            return Err(IcooError::runtime(
+                "invalid chunked response: missing chunk size",
+                Some(span),
+            ));
+        };
+        let size_text = std::str::from_utf8(&bytes[index..line_end])
+            .map_err(|_| IcooError::runtime("invalid chunked response size", Some(span)))?;
+        let size = usize::from_str_radix(size_text.trim(), 16)
+            .map_err(|_| IcooError::runtime("invalid chunked response size", Some(span)))?;
+        index = line_end + 2;
+        if size == 0 {
+            break;
+        }
+        if bytes.len() < index + size + 2 {
+            return Err(IcooError::runtime(
+                "invalid chunked response: incomplete chunk",
+                Some(span),
+            ));
+        }
+        decoded.extend_from_slice(&bytes[index..index + size]);
+        index += size;
+        if bytes.get(index..index + 2) != Some(b"\r\n") {
+            return Err(IcooError::runtime(
+                "invalid chunked response: missing chunk terminator",
+                Some(span),
+            ));
+        }
+        index += 2;
+    }
+    Ok(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {
+    bytes
+        .get(start..)?
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .map(|offset| start + offset)
 }
 
 fn http_server_serve_once(host: &str, port: u16, body: &str, span: Span) -> IcooResult<()> {
@@ -3088,6 +3195,8 @@ struct ParsedWebInoRequest {
     query: String,
     headers: HashMap<String, Value>,
     body: String,
+    form: HashMap<String, Value>,
+    files: HashMap<String, Value>,
 }
 
 enum WebInoAccepted {
@@ -3096,6 +3205,52 @@ enum WebInoAccepted {
         stream: std::net::TcpStream,
     },
     AcceptError(String),
+}
+
+fn read_web_ino_request_text(stream: &mut std::net::TcpStream) -> Result<String, String> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|err| format!("web.ino request read failed: {}", err))?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let size = std::io::Read::read(stream, &mut buffer)
+            .map_err(|err| format!("web.ino request read failed: {}", err))?;
+        if size == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..size]);
+        let Some(body_start) = find_http_body_start(&bytes) else {
+            continue;
+        };
+        let head = String::from_utf8_lossy(&bytes[..body_start]);
+        let content_length = http_content_length(&head);
+        if content_length
+            .map(|length| bytes.len() >= body_start + length)
+            .unwrap_or(true)
+        {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn find_http_body_start(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+}
+
+fn http_content_length(head: &str) -> Option<usize> {
+    head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            value.trim().parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
 }
 
 fn parse_web_ino_request(request: &str, span: Span) -> IcooResult<ParsedWebInoRequest> {
@@ -3125,12 +3280,15 @@ fn parse_web_ino_request(request: &str, span: Span) -> IcooResult<ParsedWebInoRe
             );
         }
     }
+    let (form, files) = parse_web_ino_multipart(&headers, body);
     Ok(ParsedWebInoRequest {
         method,
         path,
         query,
         headers,
         body: body.to_string(),
+        form,
+        files,
     })
 }
 
@@ -3144,7 +3302,109 @@ fn web_ino_request_value(request: &ParsedWebInoRequest) -> Value {
         Value::Map(Rc::new(RefCell::new(request.headers.clone()))),
     );
     map.insert("body".to_string(), Value::String(request.body.clone()));
+    map.insert(
+        "form".to_string(),
+        Value::Map(Rc::new(RefCell::new(request.form.clone()))),
+    );
+    map.insert(
+        "files".to_string(),
+        Value::Map(Rc::new(RefCell::new(request.files.clone()))),
+    );
     Value::Map(Rc::new(RefCell::new(map)))
+}
+
+fn parse_web_ino_multipart(
+    headers: &HashMap<String, Value>,
+    body: &str,
+) -> (HashMap<String, Value>, HashMap<String, Value>) {
+    let mut form = HashMap::new();
+    let mut files = HashMap::new();
+    let Some(Value::String(content_type)) = headers.get("content-type") else {
+        return (form, files);
+    };
+    let Some(boundary) = multipart_boundary(content_type) else {
+        return (form, files);
+    };
+    let marker = format!("--{}", boundary);
+    for part in body.split(&marker).skip(1) {
+        let part = part.trim_start_matches("\r\n");
+        if part.starts_with("--") {
+            break;
+        }
+        let Some((part_head, part_body)) = part.split_once("\r\n\r\n") else {
+            continue;
+        };
+        let mut disposition = HashMap::new();
+        let mut content_type = "application/octet-stream".to_string();
+        for line in part_head.lines() {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if name.trim().eq_ignore_ascii_case("content-disposition") {
+                disposition = parse_header_parameters(value);
+            } else if name.trim().eq_ignore_ascii_case("content-type") {
+                content_type = value.trim().to_string();
+            }
+        }
+        let Some(field_name) = disposition.get("name").cloned() else {
+            continue;
+        };
+        let content = part_body
+            .strip_suffix("\r\n")
+            .unwrap_or(part_body)
+            .to_string();
+        if let Some(filename) = disposition.get("filename").cloned() {
+            let mut file = HashMap::new();
+            file.insert("field".to_string(), Value::String(field_name.clone()));
+            file.insert("filename".to_string(), Value::String(filename));
+            file.insert("content_type".to_string(), Value::String(content_type));
+            file.insert("content".to_string(), Value::String(content.clone()));
+            file.insert(
+                "size".to_string(),
+                Value::Int(content.as_bytes().len() as i64),
+            );
+            files.insert(field_name, Value::Map(Rc::new(RefCell::new(file))));
+        } else {
+            form.insert(field_name, Value::String(content));
+        }
+    }
+    (form, files)
+}
+
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    let mut parts = content_type.split(';');
+    let media_type = parts.next()?.trim();
+    if !media_type.eq_ignore_ascii_case("multipart/form-data") {
+        return None;
+    }
+    parts.find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        if name.trim().eq_ignore_ascii_case("boundary") {
+            Some(trim_header_quotes(value.trim()).to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_header_parameters(value: &str) -> HashMap<String, String> {
+    value
+        .split(';')
+        .filter_map(|part| {
+            let (name, value) = part.split_once('=')?;
+            Some((
+                name.trim().to_ascii_lowercase(),
+                trim_header_quotes(value.trim()).to_string(),
+            ))
+        })
+        .collect()
+}
+
+fn trim_header_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
 }
 
 fn web_ino_route_key(method: &str, path: &str) -> String {
@@ -3155,8 +3415,83 @@ fn web_ino_route_key(method: &str, path: &str) -> String {
     key
 }
 
+fn web_ino_write_stream_chunk(
+    response: &mut WebInoResponse,
+    chunk: String,
+    span: Span,
+) -> IcooResult<()> {
+    if response.stream_ended {
+        return Err(IcooError::runtime(
+            "cannot write after response stream ended",
+            Some(span),
+        ));
+    }
+    response.streaming = true;
+    response.sent = true;
+    if !response.headers_sent {
+        web_ino_write_stream_headers(response, span)?;
+    }
+    if let Some(writer) = response.writer.clone() {
+        let frame = format!("{:X}\r\n{}\r\n", chunk.as_bytes().len(), chunk);
+        std::io::Write::write_all(&mut *writer.borrow_mut(), frame.as_bytes()).map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino stream response write failed: {}", err),
+                Some(span),
+            )
+        })?;
+    } else {
+        response.chunks.push(chunk);
+    }
+    Ok(())
+}
+
+fn web_ino_write_stream_headers(response: &mut WebInoResponse, span: Span) -> IcooResult<()> {
+    let status_text = http_status_text(response.status);
+    let headers = format!(
+        "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+        response.status, status_text, response.content_type
+    );
+    if let Some(writer) = response.writer.clone() {
+        std::io::Write::write_all(&mut *writer.borrow_mut(), headers.as_bytes()).map_err(
+            |err| {
+                IcooError::runtime(
+                    format!("web.ino stream response header write failed: {}", err),
+                    Some(span),
+                )
+            },
+        )?;
+    }
+    response.headers_sent = true;
+    Ok(())
+}
+
+fn web_ino_end_stream(response: &mut WebInoResponse, span: Span) -> IcooResult<()> {
+    if response.stream_ended {
+        return Ok(());
+    }
+    response.streaming = true;
+    response.sent = true;
+    if !response.headers_sent {
+        web_ino_write_stream_headers(response, span)?;
+    }
+    if let Some(writer) = response.writer.clone() {
+        std::io::Write::write_all(&mut *writer.borrow_mut(), b"0\r\n\r\n").map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino stream response end failed: {}", err),
+                Some(span),
+            )
+        })?;
+    }
+    response.stream_ended = true;
+    Ok(())
+}
+
 fn web_ino_http_response(response: &WebInoResponse) -> String {
-    let body = response.body.clone();
+    let body = if response.streaming {
+        response.chunks.join("")
+    } else {
+        response.body.clone()
+    };
     let status_text = http_status_text(response.status);
     format!(
         "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n{}",

@@ -392,8 +392,13 @@ pub struct WebInoRoute {
 pub struct WebInoResponse {
     pub status: i64,
     pub body: String,
+    pub chunks: Vec<String>,
     pub content_type: String,
     pub sent: bool,
+    pub streaming: bool,
+    pub headers_sent: bool,
+    pub stream_ended: bool,
+    pub writer: Option<Rc<RefCell<std::net::TcpStream>>>,
 }
 
 #[derive(Clone)]

@@ -991,8 +991,8 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("WebInoApp", "listen_once" | "listen" | "listen_with_workers") => {
             Some(TypeInfo::known("Nil"))
         }
-        ("WebInoResponse", "status") => Some(TypeInfo::known("WebInoResponse")),
-        ("WebInoResponse", "send" | "json") => Some(TypeInfo::known("Nil")),
+        ("WebInoResponse", "status" | "write") => Some(TypeInfo::known("WebInoResponse")),
+        ("WebInoResponse", "send" | "json" | "end") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1204,12 +1204,15 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("WebInoResponse", "send" | "json") => Some(native_sig(
+        ("WebInoResponse", "send" | "json" | "write") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Any")],
             None,
             return_type,
         )),
+        ("WebInoResponse", "end") => {
+            Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
+        }
         ("EventLoop", "spawn") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Coroutine")],
