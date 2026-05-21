@@ -3,6 +3,7 @@ use crate::runtime::env::EnvRef;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +22,7 @@ pub enum Value {
     NativeMethod(Rc<NativeMethod>),
     NativeModule(Rc<NativeModule>),
     NativeModuleMethod(Rc<NativeModuleMethod>),
+    Module(Rc<IcooModule>),
     Coroutine(Rc<RefCell<IcooCoroutine>>),
     Task(Rc<RefCell<IcooTask>>),
     EventLoop(Rc<RefCell<IcooEventLoop>>),
@@ -57,6 +59,7 @@ impl Value {
                 "Function".to_string()
             }
             Value::NativeModule(module) => module.name.clone(),
+            Value::Module(_) => "Module".to_string(),
             Value::Coroutine(_) => "Coroutine".to_string(),
             Value::Task(_) => "Task".to_string(),
             Value::EventLoop(_) => "EventLoop".to_string(),
@@ -98,6 +101,7 @@ impl Value {
             Value::NativeModuleMethod(method) => {
                 format!("<native fn {}.{}>", method.module, method.name)
             }
+            Value::Module(module) => format!("<module {}>", module.path.display()),
             Value::Coroutine(coroutine) => format!("<coroutine {}>", coroutine.borrow().name),
             Value::Task(task) => format!("<task {}>", task.borrow().id),
             Value::EventLoop(loop_ref) => {
@@ -356,6 +360,12 @@ impl fmt::Debug for NativeModuleMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "<native fn {}.{}>", self.module, self.name)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IcooModule {
+    pub path: PathBuf,
+    pub exports: HashMap<String, Value>,
 }
 
 #[derive(Clone)]

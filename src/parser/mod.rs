@@ -31,6 +31,15 @@ impl Parser {
     }
 
     fn declaration(&mut self) -> IcooResult<Stmt> {
+        if self.matches(&TokenKind::Import) {
+            return self.import_module_stmt();
+        }
+        if self.matches(&TokenKind::From) {
+            return self.import_names_stmt();
+        }
+        if self.matches(&TokenKind::Export) {
+            return self.export_decl();
+        }
         if self.matches(&TokenKind::Let) {
             return Ok(Stmt::Let(self.binding_decl(false, false)?));
         }
@@ -57,6 +66,73 @@ impl Parser {
             return Ok(Stmt::Class(self.class_decl()?));
         }
         self.statement()
+    }
+
+    fn export_decl(&mut self) -> IcooResult<Stmt> {
+        let span = self.previous().span;
+        let stmt = if self.matches(&TokenKind::Let) {
+            Stmt::Let(self.binding_decl(false, false)?)
+        } else if self.matches(&TokenKind::Const) {
+            let decl = self.binding_decl(true, false)?;
+            validate_const_name(&decl.name)?;
+            Stmt::Const(decl)
+        } else if self.matches(&TokenKind::Final) {
+            Stmt::Final(self.binding_decl(false, true)?)
+        } else if self.matches(&TokenKind::Async) {
+            self.consume(TokenKind::Fn, "expected 'fn' after 'async'")?;
+            Stmt::Function(self.function_decl(true)?)
+        } else if self.matches(&TokenKind::Co) {
+            self.consume(TokenKind::Fn, "expected 'fn' after 'co'")?;
+            Stmt::Function(self.function_decl(true)?)
+        } else if self.matches(&TokenKind::Fn) {
+            Stmt::Function(self.function_decl(false)?)
+        } else if self.matches(&TokenKind::Class) {
+            Stmt::Class(self.class_decl()?)
+        } else {
+            return Err(IcooError::parse(
+                "expected declaration after 'export'",
+                span,
+            ));
+        };
+        Ok(Stmt::ExportDecl(Box::new(stmt)))
+    }
+
+    fn import_module_stmt(&mut self) -> IcooResult<Stmt> {
+        let span = self.previous().span;
+        let source = self.string_literal("expected module path after 'import'")?;
+        self.consume(TokenKind::As, "expected 'as' after module path")?;
+        let alias = self.identifier("expected import alias")?;
+        self.consume_statement_end()?;
+        Ok(Stmt::ImportModule {
+            source,
+            alias,
+            span,
+        })
+    }
+
+    fn import_names_stmt(&mut self) -> IcooResult<Stmt> {
+        let span = self.previous().span;
+        let source = self.string_literal("expected module path after 'from'")?;
+        self.consume(TokenKind::Import, "expected 'import' after module path")?;
+        let mut items = Vec::new();
+        loop {
+            let name = self.identifier("expected imported name")?;
+            let alias = if self.matches(&TokenKind::As) {
+                Some(self.identifier("expected import alias")?)
+            } else {
+                None
+            };
+            items.push(ImportItem { name, alias });
+            if !self.matches(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.consume_statement_end()?;
+        Ok(Stmt::ImportNames {
+            source,
+            items,
+            span,
+        })
     }
 
     fn binding_decl(
@@ -631,6 +707,14 @@ impl Parser {
                 name: "self".to_string(),
                 span: token.span,
             }),
+            _ => Err(IcooError::parse(message, token.span)),
+        }
+    }
+
+    fn string_literal(&mut self, message: &str) -> IcooResult<String> {
+        let token = self.advance().clone();
+        match token.kind {
+            TokenKind::String(value) => Ok(value),
             _ => Err(IcooError::parse(message, token.span)),
         }
     }

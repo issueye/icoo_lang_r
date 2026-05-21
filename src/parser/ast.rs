@@ -7,6 +7,17 @@ pub struct Program {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    ImportModule {
+        source: String,
+        alias: Identifier,
+        span: Span,
+    },
+    ImportNames {
+        source: String,
+        items: Vec<ImportItem>,
+        span: Span,
+    },
+    ExportDecl(Box<Stmt>),
     Let(BindingDecl),
     Const(BindingDecl),
     Final(BindingDecl),
@@ -33,6 +44,12 @@ pub enum Stmt {
     Break(Span),
     Continue(Span),
     Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportItem {
+    pub name: Identifier,
+    pub alias: Option<Identifier>,
 }
 
 #[derive(Debug, Clone)]

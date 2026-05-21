@@ -1,10 +1,22 @@
 use std::cell::RefCell;
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 fn run(source: &str) -> Result<Vec<String>, String> {
     let output = Rc::new(RefCell::new(Vec::new()));
     let captured = output.clone();
     icoo_lang_r::run_source_with_output(source, move |line| {
+        captured.borrow_mut().push(line);
+    })
+    .map(|_| output.borrow().clone())
+    .map_err(|err| err.to_string())
+}
+
+fn run_file(path: PathBuf) -> Result<Vec<String>, String> {
+    let output = Rc::new(RefCell::new(Vec::new()));
+    let captured = output.clone();
+    icoo_lang_r::run_file_with_output(path, move |line| {
         captured.borrow_mut().push(line);
     })
     .map(|_| output.borrow().clone())
@@ -551,4 +563,100 @@ fs.write_text("target/icoo_fs_test.txt", 1)
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 2 but got Int"));
+}
+
+#[test]
+fn supports_file_modules_imports_and_exports() {
+    let dir = PathBuf::from("target/icoo_module_tests/basic");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("math_extra.icoo"),
+        r#"
+const SECRET: String = "hidden"
+export const VERSION: String = "1.0.0"
+
+export fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+export class User:
+    let name: String
+
+    fn init(self, name: String):
+        self.name = name
+
+    fn to_string(self) -> String:
+        return self.name
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.icoo"),
+        r#"
+import "./math_extra.icoo" as extra
+from "./math_extra.icoo" import add, User as AppUser
+
+print(extra.VERSION)
+print(extra.add(1, 2).to_string())
+print(add(3, 4).to_string())
+let user = AppUser("Tom")
+print(user.to_string())
+"#,
+    )
+    .unwrap();
+
+    let output = run_file(dir.join("main.icoo")).unwrap();
+    assert_eq!(output, vec!["1.0.0", "3", "7", "Tom"]);
+}
+
+#[test]
+fn modules_reject_private_exports_and_cycles() {
+    let private_dir = PathBuf::from("target/icoo_module_tests/private");
+    fs::create_dir_all(&private_dir).unwrap();
+    fs::write(
+        private_dir.join("config.icoo"),
+        r#"
+const SECRET: String = "hidden"
+export const NAME: String = "visible"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        private_dir.join("main.icoo"),
+        r#"
+import "./config.icoo" as config
+print(config.SECRET)
+"#,
+    )
+    .unwrap();
+    let err = run_file(private_dir.join("main.icoo")).unwrap_err();
+    assert!(err.contains("has no export 'SECRET'"));
+
+    let cycle_dir = PathBuf::from("target/icoo_module_tests/cycle");
+    fs::create_dir_all(&cycle_dir).unwrap();
+    fs::write(
+        cycle_dir.join("a.icoo"),
+        r#"
+import "./b.icoo" as b
+export const A: String = "a"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        cycle_dir.join("b.icoo"),
+        r#"
+import "./a.icoo" as a
+export const B: String = "b"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        cycle_dir.join("main.icoo"),
+        r#"
+import "./a.icoo" as a
+print(a.A)
+"#,
+    )
+    .unwrap();
+    let err = run_file(cycle_dir.join("main.icoo")).unwrap_err();
+    assert!(err.contains("module cycle detected"));
 }

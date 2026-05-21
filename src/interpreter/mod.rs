@@ -3,8 +3,10 @@ use crate::lexer::token::Span;
 use crate::parser::ast::*;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
 use crate::runtime::value::*;
+use crate::{lexer, parser, resolver, typechecker};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +15,9 @@ pub struct Interpreter {
     output: Box<dyn FnMut(String)>,
     current_loop: Option<Rc<RefCell<IcooEventLoop>>>,
     current_task: Option<Rc<RefCell<IcooTask>>>,
+    module_cache: HashMap<PathBuf, Rc<IcooModule>>,
+    loading_modules: Vec<PathBuf>,
+    current_module_dir: Option<PathBuf>,
 }
 
 impl Default for Interpreter {
@@ -36,6 +41,9 @@ impl Interpreter {
             output: Box::new(output),
             current_loop: None,
             current_task: None,
+            module_cache: HashMap::new(),
+            loading_modules: Vec::new(),
+            current_module_dir: None,
         };
         interpreter.install_natives();
         interpreter
@@ -48,42 +56,209 @@ impl Interpreter {
         Ok(())
     }
 
-    fn install_natives(&mut self) {
-        for (name, arity) in [
-            ("print", 1),
-            ("len", 1),
-            ("str", 1),
-            ("int", 1),
-            ("float", 1),
-            ("type", 1),
-            ("EventLoop", 0),
-            ("current_loop", 0),
-            ("sleep", 1),
-        ] {
-            self.env.borrow_mut().define(
-                name.to_string(),
-                Value::NativeFunction(Rc::new(NativeFunction {
-                    name: name.to_string(),
-                    arity,
-                })),
-                true,
-                BindingKind::Const,
-            );
-        }
-        for name in ["math", "time", "json", "env", "fs"] {
-            self.env.borrow_mut().define(
-                name.to_string(),
-                Value::NativeModule(Rc::new(NativeModule {
-                    name: name.to_string(),
-                })),
-                true,
-                BindingKind::Const,
-            );
-        }
+    pub fn interpret_file(&mut self, path: impl AsRef<Path>) -> IcooResult<()> {
+        let path = canonical_module_path(path.as_ref()).map_err(|message| {
+            IcooError::runtime(format!("module load error: {}", message), None)
+        })?;
+        self.load_module(&path)?;
+        Ok(())
     }
 
+    fn install_natives(&mut self) {
+        install_natives_into(&self.env);
+    }
+
+    fn load_relative_module(&mut self, source: &str, span: Span) -> IcooResult<Rc<IcooModule>> {
+        if !source.ends_with(".icoo") {
+            return Err(IcooError::runtime(
+                "module path must end with '.icoo'",
+                Some(span),
+            ));
+        }
+        if !(source.starts_with("./") || source.starts_with("../")) {
+            return Err(IcooError::runtime(
+                "module path must start with './' or '../'",
+                Some(span),
+            ));
+        }
+        let base_dir = self
+            .current_module_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let path = canonical_module_path(&base_dir.join(source)).map_err(|message| {
+            IcooError::runtime(format!("module load error: {}", message), Some(span))
+        })?;
+        self.load_module(&path)
+    }
+
+    fn load_module(&mut self, path: &Path) -> IcooResult<Rc<IcooModule>> {
+        if let Some(module) = self.module_cache.get(path) {
+            return Ok(module.clone());
+        }
+        if let Some(index) = self
+            .loading_modules
+            .iter()
+            .position(|loading| loading == path)
+        {
+            let mut cycle = self.loading_modules[index..]
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            cycle.push(path.display().to_string());
+            return Err(IcooError::runtime(
+                format!("module cycle detected: {}", cycle.join(" -> ")),
+                None,
+            ));
+        }
+
+        let source = std::fs::read_to_string(path).map_err(|err| {
+            IcooError::runtime(
+                format!("failed to read module '{}': {}", path.display(), err),
+                None,
+            )
+        })?;
+        let tokens = lexer::lex(&source)?;
+        let program = parser::parse(tokens)?;
+        resolver::resolve(&program)?;
+        typechecker::check(&program)?;
+
+        self.loading_modules.push(path.to_path_buf());
+        let previous_env = self.env.clone();
+        let previous_dir = self.current_module_dir.clone();
+        let module_env = Environment::new();
+        self.env = module_env.clone();
+        install_natives_into(&self.env);
+        self.current_module_dir = path.parent().map(Path::to_path_buf);
+
+        let execution = (|| {
+            for stmt in &program.statements {
+                self.execute(stmt)?;
+            }
+            let exports = self.collect_exports(&program, &module_env)?;
+            Ok(exports)
+        })();
+
+        self.env = previous_env;
+        self.current_module_dir = previous_dir;
+        self.loading_modules.pop();
+
+        let exports = execution?;
+        let module = Rc::new(IcooModule {
+            path: path.to_path_buf(),
+            exports,
+        });
+        self.module_cache.insert(path.to_path_buf(), module.clone());
+        Ok(module)
+    }
+
+    fn collect_exports(
+        &self,
+        program: &Program,
+        module_env: &EnvRef,
+    ) -> IcooResult<HashMap<String, Value>> {
+        let mut exports = HashMap::new();
+        for stmt in &program.statements {
+            if let Stmt::ExportDecl(inner) = stmt {
+                let (name, span) = export_name(inner).ok_or_else(|| {
+                    IcooError::runtime("exported statement has no binding name", None)
+                })?;
+                if exports.contains_key(&name) {
+                    return Err(IcooError::runtime(
+                        format!("duplicate export '{}'", name),
+                        Some(span),
+                    ));
+                }
+                let value = module_env.borrow().get(&name, span)?;
+                exports.insert(name, value);
+            }
+        }
+        Ok(exports)
+    }
+}
+
+fn install_natives_into(env: &EnvRef) {
+    for (name, arity) in [
+        ("print", 1),
+        ("len", 1),
+        ("str", 1),
+        ("int", 1),
+        ("float", 1),
+        ("type", 1),
+        ("EventLoop", 0),
+        ("current_loop", 0),
+        ("sleep", 1),
+    ] {
+        env.borrow_mut().define(
+            name.to_string(),
+            Value::NativeFunction(Rc::new(NativeFunction {
+                name: name.to_string(),
+                arity,
+            })),
+            true,
+            BindingKind::Const,
+        );
+    }
+    for name in ["math", "time", "json", "env", "fs"] {
+        env.borrow_mut().define(
+            name.to_string(),
+            Value::NativeModule(Rc::new(NativeModule {
+                name: name.to_string(),
+            })),
+            true,
+            BindingKind::Const,
+        );
+    }
+}
+
+impl Interpreter {
     fn execute(&mut self, stmt: &Stmt) -> IcooResult<()> {
         match stmt {
+            Stmt::ImportModule {
+                source,
+                alias,
+                span,
+            } => {
+                let module = self.load_relative_module(source, *span)?;
+                self.env.borrow_mut().define(
+                    alias.name.clone(),
+                    Value::Module(module),
+                    true,
+                    BindingKind::Const,
+                );
+                Ok(())
+            }
+            Stmt::ImportNames {
+                source,
+                items,
+                span,
+            } => {
+                let module = self.load_relative_module(source, *span)?;
+                for item in items {
+                    let local = item.alias.as_ref().unwrap_or(&item.name);
+                    let value = module
+                        .exports
+                        .get(&item.name.name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            IcooError::runtime(
+                                format!(
+                                    "module '{}' has no export '{}'",
+                                    module.path.display(),
+                                    item.name.name
+                                ),
+                                Some(item.name.span),
+                            )
+                        })?;
+                    self.env.borrow_mut().define(
+                        local.name.clone(),
+                        value,
+                        true,
+                        BindingKind::Const,
+                    );
+                }
+                Ok(())
+            }
+            Stmt::ExportDecl(inner) => self.execute(inner),
             Stmt::Let(decl) => self.define_binding(decl, BindingKind::Mutable),
             Stmt::Const(decl) => self.define_binding(decl, BindingKind::Const),
             Stmt::Final(decl) => self.define_binding(decl, BindingKind::Final),
@@ -443,6 +618,18 @@ impl Interpreter {
     }
 
     fn get_property(&mut self, object: Value, name: &str, span: Span) -> IcooResult<Value> {
+        if let Value::Module(module) = &object {
+            return module.exports.get(name).cloned().ok_or_else(|| {
+                IcooError::runtime(
+                    format!(
+                        "module '{}' has no export '{}'",
+                        module.path.display(),
+                        name
+                    ),
+                    Some(span),
+                )
+            });
+        }
         if let Value::NativeModule(module) = &object {
             if has_native_module_method(&module.name, name) {
                 return Ok(Value::NativeModuleMethod(Rc::new(NativeModuleMethod {
@@ -911,6 +1098,7 @@ impl Interpreter {
             | Value::Function(_)
             | Value::Coroutine(_)
             | Value::Class(_)
+            | Value::Module(_)
             | Value::NativeModule(_) => true,
             Value::NativeFunction(_) | Value::NativeMethod(_) | Value::NativeModuleMethod(_) => {
                 true
@@ -2164,6 +2352,30 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
             "exists" | "is_file" | "is_dir" | "read_text" | "write_text" | "list_dir"
         ),
         _ => false,
+    }
+}
+
+fn canonical_module_path(path: &Path) -> Result<PathBuf, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|err| format!("failed to resolve '{}': {}", path.display(), err))?;
+    if path.extension().and_then(|ext| ext.to_str()) != Some("icoo") {
+        return Err(format!(
+            "module path '{}' must end with .icoo",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn export_name(stmt: &Stmt) -> Option<(String, Span)> {
+    match stmt {
+        Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => {
+            Some((decl.name.name.clone(), decl.name.span))
+        }
+        Stmt::Function(decl) => Some((decl.name.name.clone(), decl.name.span)),
+        Stmt::Class(decl) => Some((decl.name.name.clone(), decl.name.span)),
+        _ => None,
     }
 }
 

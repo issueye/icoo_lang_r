@@ -118,6 +118,35 @@ impl TypeChecker {
     fn collect_declarations(&mut self, program: &Program) {
         for stmt in &program.statements {
             match stmt {
+                Stmt::ExportDecl(inner) => match inner.as_ref() {
+                    Stmt::Function(decl) => {
+                        self.functions
+                            .insert(decl.name.name.clone(), function_sig(decl));
+                        self.globals
+                            .insert(decl.name.name.clone(), TypeInfo::known("Function"));
+                    }
+                    Stmt::Class(decl) => {
+                        let mut fields = HashMap::new();
+                        for field in &decl.fields {
+                            fields.insert(field.name.name.clone(), type_from_ref(&field.type_hint));
+                        }
+                        let mut methods = HashMap::new();
+                        for method in &decl.methods {
+                            methods.insert(method.name.name.clone(), function_sig(method));
+                        }
+                        self.classes.insert(
+                            decl.name.name.clone(),
+                            ClassInfo {
+                                superclass: decl.superclass.as_ref().map(|name| name.name.clone()),
+                                fields,
+                                methods,
+                            },
+                        );
+                        self.globals
+                            .insert(decl.name.name.clone(), TypeInfo::known("Class"));
+                    }
+                    _ => {}
+                },
                 Stmt::Function(decl) => {
                     self.functions
                         .insert(decl.name.name.clone(), function_sig(decl));
@@ -160,6 +189,16 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt) -> IcooResult<()> {
         match stmt {
+            Stmt::ImportModule { alias, .. } => {
+                self.define(alias.name.clone(), TypeInfo::known("Module"));
+            }
+            Stmt::ImportNames { items, .. } => {
+                for item in items {
+                    let local = item.alias.as_ref().unwrap_or(&item.name);
+                    self.define(local.name.clone(), TypeInfo::Unknown);
+                }
+            }
+            Stmt::ExportDecl(inner) => self.check_stmt(inner)?,
             Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => {
                 let inferred = if let Some(initializer) = &decl.initializer {
                     let value_type = self.infer_expr(initializer)?;

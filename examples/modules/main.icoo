@@ -1,0 +1,9 @@
+import "./math_extra.icoo" as extra
+from "./math_extra.icoo" import add, User as AppUser
+
+print(extra.VERSION)
+print(extra.add(1, 2).to_string())
+print(add(3, 4).to_string())
+
+let user = AppUser("Tom")
+print(user.to_string())

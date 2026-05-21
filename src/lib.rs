@@ -7,6 +7,7 @@ pub mod runtime;
 pub mod typechecker;
 
 use error::IcooError;
+use std::path::Path;
 
 pub fn run_source(source: &str) -> Result<(), IcooError> {
     let tokens = lexer::lex(source)?;
@@ -27,4 +28,17 @@ where
     typechecker::check(&program)?;
     let mut interpreter = interpreter::Interpreter::with_output(output);
     interpreter.interpret(&program)
+}
+
+pub fn run_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
+    let mut interpreter = interpreter::Interpreter::new();
+    interpreter.interpret_file(path)
+}
+
+pub fn run_file_with_output<F>(path: impl AsRef<Path>, output: F) -> Result<(), IcooError>
+where
+    F: FnMut(String) + 'static,
+{
+    let mut interpreter = interpreter::Interpreter::with_output(output);
+    interpreter.interpret_file(path)
 }

@@ -26,18 +26,38 @@ impl Resolver {
     }
 
     fn resolve_program(&mut self, program: &Program) -> IcooResult<()> {
-        self.resolve_statements(&program.statements)
-    }
-
-    fn resolve_statements(&mut self, statements: &[Stmt]) -> IcooResult<()> {
-        for stmt in statements {
-            self.resolve_stmt(stmt)?;
+        for stmt in &program.statements {
+            self.resolve_stmt(stmt, true)?;
         }
         Ok(())
     }
 
-    fn resolve_stmt(&mut self, stmt: &Stmt) -> IcooResult<()> {
+    fn resolve_statements(&mut self, statements: &[Stmt]) -> IcooResult<()> {
+        for stmt in statements {
+            self.resolve_stmt(stmt, false)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_stmt(&mut self, stmt: &Stmt, top_level: bool) -> IcooResult<()> {
         match stmt {
+            Stmt::ImportModule { span, .. } | Stmt::ImportNames { span, .. } => {
+                if !top_level {
+                    return Err(IcooError::resolve(
+                        "import can only be used at module top level",
+                        *span,
+                    ));
+                }
+            }
+            Stmt::ExportDecl(inner) => {
+                if !top_level {
+                    return Err(IcooError::resolve(
+                        "export can only be used at module top level",
+                        stmt_span(inner),
+                    ));
+                }
+                self.resolve_stmt(inner, true)?;
+            }
             Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => {
                 if let Some(initializer) = &decl.initializer {
                     self.resolve_expr(initializer)?;
@@ -182,5 +202,23 @@ impl Resolver {
             }
         }
         Ok(())
+    }
+}
+
+fn stmt_span(stmt: &Stmt) -> crate::lexer::token::Span {
+    match stmt {
+        Stmt::ImportModule { span, .. }
+        | Stmt::ImportNames { span, .. }
+        | Stmt::Return { span, .. }
+        | Stmt::Yield { span, .. }
+        | Stmt::Break(span)
+        | Stmt::Continue(span) => *span,
+        Stmt::ExportDecl(inner) => stmt_span(inner),
+        Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => decl.name.span,
+        Stmt::Function(decl) => decl.name.span,
+        Stmt::Class(decl) => decl.name.span,
+        Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::Expr(condition) => {
+            condition.span()
+        }
     }
 }
