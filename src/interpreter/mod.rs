@@ -70,7 +70,7 @@ impl Interpreter {
                 BindingKind::Const,
             );
         }
-        for name in ["math", "time", "json", "env"] {
+        for name in ["math", "time", "json", "env", "fs"] {
             self.env.borrow_mut().define(
                 name.to_string(),
                 Value::NativeModule(Rc::new(NativeModule {
@@ -1005,6 +1005,57 @@ impl Interpreter {
                 expect_arity(&args, 1, span)?;
                 let name = expect_string(&args[0], span)?;
                 Ok(Value::Bool(std::env::var_os(name).is_some()))
+            }
+            ("fs", "exists") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                Ok(Value::Bool(std::path::Path::new(&path).exists()))
+            }
+            ("fs", "is_file") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                Ok(Value::Bool(std::path::Path::new(&path).is_file()))
+            }
+            ("fs", "is_dir") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
+            }
+            ("fs", "read_text") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                std::fs::read_to_string(&path)
+                    .map(Value::String)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("fs.read_text() failed: {}", err), Some(span))
+                    })
+            }
+            ("fs", "write_text") => {
+                expect_arity(&args, 2, span)?;
+                let path = expect_string(&args[0], span)?;
+                let content = expect_string(&args[1], span)?;
+                std::fs::write(&path, content)
+                    .map(|_| Value::Nil)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("fs.write_text() failed: {}", err), Some(span))
+                    })
+            }
+            ("fs", "list_dir") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                let mut entries = Vec::new();
+                for entry in std::fs::read_dir(&path).map_err(|err| {
+                    IcooError::runtime(format!("fs.list_dir() failed: {}", err), Some(span))
+                })? {
+                    let entry = entry.map_err(|err| {
+                        IcooError::runtime(format!("fs.list_dir() failed: {}", err), Some(span))
+                    })?;
+                    entries.push(Value::String(
+                        entry.file_name().to_string_lossy().into_owned(),
+                    ));
+                }
+                entries.sort_by_key(Value::display);
+                Ok(Value::Array(Rc::new(RefCell::new(entries))))
             }
             _ => Err(IcooError::runtime(
                 format!(
@@ -2108,6 +2159,10 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
         "time" => matches!(name, "now_ms" | "now_sec"),
         "json" => matches!(name, "stringify" | "parse"),
         "env" => matches!(name, "cwd" | "args" | "get" | "has"),
+        "fs" => matches!(
+            name,
+            "exists" | "is_file" | "is_dir" | "read_text" | "write_text" | "list_dir"
+        ),
         _ => false,
     }
 }

@@ -525,3 +525,30 @@ env.get(1)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
 }
+
+#[test]
+fn supports_fs_builtin_module() {
+    let output = run(r#"
+let path = "target/icoo_fs_test.txt"
+fs.write_text(path, "hello fs")
+print(fs.exists(path).to_string())
+print(fs.is_file(path).to_string())
+print(fs.is_dir("target").to_string())
+print(fs.read_text(path))
+print(fs.list_dir("target").includes("icoo_fs_test.txt").to_string())
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["true", "true", "true", "hello fs", "true"]);
+
+    let err = run(r#"
+fs.read_text(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+fs.write_text("target/icoo_fs_test.txt", 1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 2 but got Int"));
+}

@@ -847,6 +847,7 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("time", "Time"),
         ("json", "Json"),
         ("env", "Env"),
+        ("fs", "Fs"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -910,6 +911,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Env", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Env", "get") => Some(TypeInfo::Unknown),
         ("Env", "has") => Some(TypeInfo::known("Bool")),
+        ("Fs", "exists" | "is_file" | "is_dir") => Some(TypeInfo::known("Bool")),
+        ("Fs", "read_text") => Some(TypeInfo::known("String")),
+        ("Fs", "write_text") => Some(TypeInfo::known("Nil")),
+        ("Fs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1036,6 +1041,18 @@ fn native_method_sig(
         ("Env", "get" | "has") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Fs", "exists" | "is_file" | "is_dir" | "read_text" | "list_dir") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Fs", "write_text") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("String")],
             None,
             return_type,
         )),

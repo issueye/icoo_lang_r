@@ -1255,6 +1255,7 @@ math
 time
 json
 env
+fs
 ```
 
 `math` 模块：
@@ -1295,6 +1296,19 @@ env.has(name: String) -> Bool
 ```
 
 第一版 `env` 模块只提供读取能力，不提供 `set`。这是为了避免脚本在运行时修改进程级环境变量带来的隐式副作用。
+
+`fs` 模块：
+
+```text
+fs.exists(path: String) -> Bool
+fs.is_file(path: String) -> Bool
+fs.is_dir(path: String) -> Bool
+fs.read_text(path: String) -> String
+fs.write_text(path: String, content: String) -> Nil
+fs.list_dir(path: String) -> Array<String>
+```
+
+`fs.write_text` 会创建或覆盖目标文件。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
 
 事件循环对象方法：
 
