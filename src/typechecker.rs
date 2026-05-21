@@ -846,6 +846,7 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("math", "Math"),
         ("time", "Time"),
         ("json", "Json"),
+        ("env", "Env"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -905,6 +906,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Time", "now_ms" | "now_sec") => Some(TypeInfo::known("Int")),
         ("Json", "stringify") => Some(TypeInfo::known("String")),
         ("Json", "parse") => Some(TypeInfo::Unknown),
+        ("Env", "cwd") => Some(TypeInfo::known("String")),
+        ("Env", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
+        ("Env", "get") => Some(TypeInfo::Unknown),
+        ("Env", "has") => Some(TypeInfo::known("Bool")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -985,6 +990,8 @@ fn native_method_sig(
         | ("Math", "random")
         | ("Time", "now_ms")
         | ("Time", "now_sec")
+        | ("Env", "cwd")
+        | ("Env", "args")
         | ("EventLoop", "run")
         | ("EventLoop", "stop")
         | ("EventLoop", "is_stopped")
@@ -1021,6 +1028,12 @@ fn native_method_sig(
             return_type,
         )),
         ("Json", "parse") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Env", "get" | "has") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("String")],
             None,

@@ -1254,6 +1254,7 @@ sleep(ms: Int) -> Task
 math
 time
 json
+env
 ```
 
 `math` 模块：
@@ -1283,6 +1284,17 @@ json.parse(text: String) -> Any
 ```
 
 `json.stringify` 支持 `Nil`、`Bool`、`Int`、`Float`、`String`、`Array`、`Map`。函数、类、实例、协程、任务和事件循环等运行时对象不参与 JSON 序列化。
+
+`env` 模块：
+
+```text
+env.cwd() -> String
+env.args() -> Array<String>
+env.get(name: String) -> String | Nil
+env.has(name: String) -> Bool
+```
+
+第一版 `env` 模块只提供读取能力，不提供 `set`。这是为了避免脚本在运行时修改进程级环境变量带来的隐式副作用。
 
 事件循环对象方法：
 

@@ -507,3 +507,21 @@ json.parse("{bad}")
     .unwrap_err();
     assert!(err.contains("runtime error: json.parse() failed"));
 }
+
+#[test]
+fn supports_env_builtin_module() {
+    let output = run(r#"
+print(env.cwd().contains("icoo_lang_r").to_string())
+print((env.args().len() >= 1).to_string())
+print(env.has("__ICOO_LANG_R_TEST_MISSING__").to_string())
+print(env.get("__ICOO_LANG_R_TEST_MISSING__").to_string())
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["true", "true", "false", "nil"]);
+
+    let err = run(r#"
+env.get(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+}

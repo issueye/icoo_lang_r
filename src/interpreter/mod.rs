@@ -70,7 +70,7 @@ impl Interpreter {
                 BindingKind::Const,
             );
         }
-        for name in ["math", "time", "json"] {
+        for name in ["math", "time", "json", "env"] {
             self.env.borrow_mut().define(
                 name.to_string(),
                 Value::NativeModule(Rc::new(NativeModule {
@@ -981,6 +981,30 @@ impl Interpreter {
                     IcooError::runtime(format!("json.parse() failed: {}", err), Some(span))
                 })?;
                 json_to_value(parsed, span)
+            }
+            ("env", "cwd") => {
+                expect_arity(&args, 0, span)?;
+                std::env::current_dir()
+                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                    .map_err(|err| {
+                        IcooError::runtime(format!("env.cwd() failed: {}", err), Some(span))
+                    })
+            }
+            ("env", "args") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Array(Rc::new(RefCell::new(
+                    std::env::args().map(Value::String).collect(),
+                ))))
+            }
+            ("env", "get") => {
+                expect_arity(&args, 1, span)?;
+                let name = expect_string(&args[0], span)?;
+                Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
+            }
+            ("env", "has") => {
+                expect_arity(&args, 1, span)?;
+                let name = expect_string(&args[0], span)?;
+                Ok(Value::Bool(std::env::var_os(name).is_some()))
             }
             _ => Err(IcooError::runtime(
                 format!(
@@ -2083,6 +2107,7 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
         ),
         "time" => matches!(name, "now_ms" | "now_sec"),
         "json" => matches!(name, "stringify" | "parse"),
+        "env" => matches!(name, "cwd" | "args" | "get" | "has"),
         _ => false,
     }
 }
