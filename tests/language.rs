@@ -1,7 +1,10 @@
 use std::cell::RefCell;
 use std::fs;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
 
 fn run(source: &str) -> Result<Vec<String>, String> {
     let output = Rc::new(RefCell::new(Vec::new()));
@@ -21,6 +24,14 @@ fn run_file(path: PathBuf) -> Result<Vec<String>, String> {
     })
     .map(|_| output.borrow().clone())
     .map_err(|err| err.to_string())
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 #[test]
@@ -659,4 +670,62 @@ print(a.A)
     .unwrap();
     let err = run_file(cycle_dir.join("main.icoo")).unwrap_err();
     assert!(err.contains("module cycle detected"));
+}
+
+#[test]
+fn supports_imported_net_http_client_and_server_modules() {
+    let dir = PathBuf::from("target/icoo_module_tests/net_http");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "net.http.server" as server
+server.serve_once("127.0.0.1", {}, "hello from icoo")
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_path = dir.join("client.icoo");
+    fs::write(
+        &client_path,
+        format!(
+            r#"
+import "net.http.client" as client
+let response = client.get("http://127.0.0.1:{}/hello")
+print(response.get("status").to_string())
+print(response.get("body"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let output = run_file(client_path).unwrap();
+    assert_eq!(output, vec!["200", "hello from icoo"]);
+    server_handle.join().unwrap().unwrap();
+
+    let err = run(r#"
+net.http.client.get("http://127.0.0.1/")
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'net'"));
+
+    let err_path = dir.join("bad.icoo");
+    fs::write(
+        &err_path,
+        r#"
+import "net.http.client" as client
+client.get(1)
+"#,
+    )
+    .unwrap();
+    let err = run_file(err_path).unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
 }

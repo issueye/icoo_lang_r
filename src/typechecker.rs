@@ -189,8 +189,8 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt) -> IcooResult<()> {
         match stmt {
-            Stmt::ImportModule { alias, .. } => {
-                self.define(alias.name.clone(), TypeInfo::known("Module"));
+            Stmt::ImportModule { source, alias, .. } => {
+                self.define(alias.name.clone(), import_module_type(source));
             }
             Stmt::ImportNames { items, .. } => {
                 for item in items {
@@ -871,6 +871,14 @@ fn common_type(left: &TypeInfo, right: &TypeInfo) -> TypeInfo {
     }
 }
 
+fn import_module_type(source: &str) -> TypeInfo {
+    match source {
+        "net.http.client" => TypeInfo::known("NetHttpClient"),
+        "net.http.server" => TypeInfo::known("NetHttpServer"),
+        _ => TypeInfo::known("Module"),
+    }
+}
+
 fn native_globals() -> HashMap<String, TypeInfo> {
     [
         ("print", "Function"),
@@ -954,6 +962,11 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Fs", "read_text") => Some(TypeInfo::known("String")),
         ("Fs", "write_text") => Some(TypeInfo::known("Nil")),
         ("Fs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
+        ("NetHttpClient", "get" | "post") => Some(TypeInfo::map(
+            TypeInfo::known("String"),
+            TypeInfo::known("Any"),
+        )),
+        ("NetHttpServer", "serve_once") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1092,6 +1105,24 @@ fn native_method_sig(
         ("Fs", "write_text") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "get") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "post") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("NetHttpServer", "serve_once") => Some(native_sig(
+            NativeArity::Exact(3),
+            vec![Some("String"), Some("Int"), Some("String")],
             None,
             return_type,
         )),

@@ -1310,6 +1310,38 @@ fs.list_dir(path: String) -> Array<String>
 
 `fs.write_text` 会创建或覆盖目标文件。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
 
+部分内置库必须显式导入后才能使用，不会注册为全局常量：
+
+```python
+import "net.http.client" as http_client
+import "net.http.server" as http_server
+```
+
+`net.http.client` 模块：
+
+```text
+http_client.get(url: String) -> Map<String, Any>
+http_client.post(url: String, body: String) -> Map<String, Any>
+```
+
+返回的 Map 至少包含：
+
+```text
+status: Int
+body: String
+headers: Map<String, String>
+```
+
+第一版只支持 `http://`，不支持 HTTPS、重定向、流式响应和自定义请求头。
+
+`net.http.server` 模块：
+
+```text
+http_server.serve_once(host: String, port: Int, body: String) -> Nil
+```
+
+`serve_once` 是阻塞调用，只接收一个 HTTP 请求并返回 `200 OK`。这是网络服务器能力的 MVP，用于验证导入式内置库、TCP 监听和 HTTP 响应流程；后续再设计长生命周期 server、路由、请求对象、并发处理和 async I/O。
+
 事件循环对象方法：
 
 ```text

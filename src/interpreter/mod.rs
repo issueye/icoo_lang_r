@@ -68,6 +68,15 @@ impl Interpreter {
         install_natives_into(&self.env);
     }
 
+    fn load_import_value(&mut self, source: &str, span: Span) -> IcooResult<Value> {
+        if is_importable_native_module(source) {
+            return Ok(Value::NativeModule(Rc::new(NativeModule {
+                name: source.to_string(),
+            })));
+        }
+        self.load_relative_module(source, span).map(Value::Module)
+    }
+
     fn load_relative_module(&mut self, source: &str, span: Span) -> IcooResult<Rc<IcooModule>> {
         if !source.ends_with(".icoo") {
             return Err(IcooError::runtime(
@@ -218,13 +227,10 @@ impl Interpreter {
                 alias,
                 span,
             } => {
-                let module = self.load_relative_module(source, *span)?;
-                self.env.borrow_mut().define(
-                    alias.name.clone(),
-                    Value::Module(module),
-                    true,
-                    BindingKind::Const,
-                );
+                let module = self.load_import_value(source, *span)?;
+                self.env
+                    .borrow_mut()
+                    .define(alias.name.clone(), module, true, BindingKind::Const);
                 Ok(())
             }
             Stmt::ImportNames {
@@ -232,23 +238,10 @@ impl Interpreter {
                 items,
                 span,
             } => {
-                let module = self.load_relative_module(source, *span)?;
+                let module = self.load_import_value(source, *span)?;
                 for item in items {
                     let local = item.alias.as_ref().unwrap_or(&item.name);
-                    let value = module
-                        .exports
-                        .get(&item.name.name)
-                        .cloned()
-                        .ok_or_else(|| {
-                            IcooError::runtime(
-                                format!(
-                                    "module '{}' has no export '{}'",
-                                    module.path.display(),
-                                    item.name.name
-                                ),
-                                Some(item.name.span),
-                            )
-                        })?;
+                    let value = imported_member(&module, &item.name.name, item.name.span)?;
                     self.env.borrow_mut().define(
                         local.name.clone(),
                         value,
@@ -1244,6 +1237,31 @@ impl Interpreter {
                 }
                 entries.sort_by_key(Value::display);
                 Ok(Value::Array(Rc::new(RefCell::new(entries))))
+            }
+            ("net.http.client", "get") => {
+                expect_arity(&args, 1, span)?;
+                let url = expect_string(&args[0], span)?;
+                http_client_request("GET", &url, "", span)
+            }
+            ("net.http.client", "post") => {
+                expect_arity(&args, 2, span)?;
+                let url = expect_string(&args[0], span)?;
+                let body = expect_string(&args[1], span)?;
+                http_client_request("POST", &url, &body, span)
+            }
+            ("net.http.server", "serve_once") => {
+                expect_arity(&args, 3, span)?;
+                let host = expect_string(&args[0], span)?;
+                let port = expect_int(&args[1], span)?;
+                if !(1..=65535).contains(&port) {
+                    return Err(IcooError::runtime(
+                        "server port must be between 1 and 65535",
+                        Some(span),
+                    ));
+                }
+                let body = expect_string(&args[2], span)?;
+                http_server_serve_once(&host, port as u16, &body, span)?;
+                Ok(Value::Nil)
             }
             _ => Err(IcooError::runtime(
                 format!(
@@ -2351,6 +2369,8 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
             name,
             "exists" | "is_file" | "is_dir" | "read_text" | "write_text" | "list_dir"
         ),
+        "net.http.client" => matches!(name, "get" | "post"),
+        "net.http.server" => matches!(name, "serve_once"),
         _ => false,
     }
 }
@@ -2368,6 +2388,36 @@ fn canonical_module_path(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn is_importable_native_module(source: &str) -> bool {
+    matches!(source, "net.http.client" | "net.http.server")
+}
+
+fn imported_member(module: &Value, name: &str, span: Span) -> IcooResult<Value> {
+    match module {
+        Value::Module(module) => module.exports.get(name).cloned().ok_or_else(|| {
+            IcooError::runtime(
+                format!(
+                    "module '{}' has no export '{}'",
+                    module.path.display(),
+                    name
+                ),
+                Some(span),
+            )
+        }),
+        Value::NativeModule(module) if has_native_module_method(&module.name, name) => {
+            Ok(Value::NativeModuleMethod(Rc::new(NativeModuleMethod {
+                module: module.name.clone(),
+                name: name.to_string(),
+            })))
+        }
+        Value::NativeModule(module) => Err(IcooError::runtime(
+            format!("module '{}' has no export '{}'", module.name, name),
+            Some(span),
+        )),
+        _ => Err(IcooError::runtime("value is not a module", Some(span))),
+    }
+}
+
 fn export_name(stmt: &Stmt) -> Option<(String, Span)> {
     match stmt {
         Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => {
@@ -2377,6 +2427,130 @@ fn export_name(stmt: &Stmt) -> Option<(String, Span)> {
         Stmt::Class(decl) => Some((decl.name.name.clone(), decl.name.span)),
         _ => None,
     }
+}
+
+struct ParsedHttpUrl {
+    host: String,
+    port: u16,
+    path: String,
+}
+
+fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return Err(IcooError::runtime(
+            "only http:// URLs are supported",
+            Some(span),
+        ));
+    };
+    let (host_port, path) = rest
+        .split_once('/')
+        .map(|(host, path)| (host, format!("/{}", path)))
+        .unwrap_or((rest, "/".to_string()));
+    if host_port.is_empty() {
+        return Err(IcooError::runtime("URL host is required", Some(span)));
+    }
+    let (host, port) = if let Some((host, port)) = host_port.rsplit_once(':') {
+        if host.is_empty() {
+            return Err(IcooError::runtime("URL host is required", Some(span)));
+        }
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| IcooError::runtime("URL port must be between 1 and 65535", Some(span)))?;
+        (host.to_string(), port)
+    } else {
+        (host_port.to_string(), 80)
+    };
+    Ok(ParsedHttpUrl { host, port, path })
+}
+
+fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooResult<Value> {
+    let parsed = parse_http_url(url, span)?;
+    let mut stream =
+        std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
+            IcooError::runtime(
+                format!("http client connection failed: {}", err),
+                Some(span),
+            )
+        })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
+    let request = if method == "POST" {
+        format!(
+            "POST {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
+            parsed.path,
+            parsed.host,
+            body.as_bytes().len(),
+            body
+        )
+    } else {
+        format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            parsed.path, parsed.host
+        )
+    };
+    std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
+        IcooError::runtime(format!("http client write failed: {}", err), Some(span))
+    })?;
+    let mut response = String::new();
+    std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
+        IcooError::runtime(format!("http client read failed: {}", err), Some(span))
+    })?;
+    parse_http_response(&response, span)
+}
+
+fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
+    let (head, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+        IcooError::runtime(
+            "invalid HTTP response: missing header terminator",
+            Some(span),
+        )
+    })?;
+    let mut lines = head.lines();
+    let status_line = lines
+        .next()
+        .ok_or_else(|| IcooError::runtime("invalid HTTP response: missing status", Some(span)))?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| IcooError::runtime("invalid HTTP response status", Some(span)))?
+        .parse::<i64>()
+        .map_err(|_| IcooError::runtime("invalid HTTP response status", Some(span)))?;
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(
+                name.trim().to_ascii_lowercase(),
+                Value::String(value.trim().to_string()),
+            );
+        }
+    }
+    let mut result = HashMap::new();
+    result.insert("status".to_string(), Value::Int(status));
+    result.insert("body".to_string(), Value::String(body.to_string()));
+    result.insert(
+        "headers".to_string(),
+        Value::Map(Rc::new(RefCell::new(headers))),
+    );
+    Ok(Value::Map(Rc::new(RefCell::new(result))))
+}
+
+fn http_server_serve_once(host: &str, port: u16, body: &str, span: Span) -> IcooResult<()> {
+    let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
+        IcooError::runtime(format!("http server bind failed: {}", err), Some(span))
+    })?;
+    let (mut stream, _) = listener.accept().map_err(|err| {
+        IcooError::runtime(format!("http server accept failed: {}", err), Some(span))
+    })?;
+    let mut buffer = [0_u8; 1024];
+    let _ = std::io::Read::read(&mut stream, &mut buffer);
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+    );
+    std::io::Write::write_all(&mut stream, response.as_bytes())
+        .map_err(|err| IcooError::runtime(format!("http server write failed: {}", err), Some(span)))
 }
 
 fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {
