@@ -1139,3 +1139,55 @@ print(response.get("body"))
     assert_eq!(output, vec!["chunked", "hello /stream"]);
     server_handle.join().unwrap().unwrap();
 }
+
+#[test]
+fn supports_std_web_ino_file_downloads() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_download");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let file_path = dir.join("report.bin");
+    let file_bytes = vec![0_u8, 1, 2, 3, 254, 255];
+    fs::write(&file_path, &file_bytes).unwrap();
+    let script_file_path = file_path.to_string_lossy().replace('\\', "/");
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn download(req: Map<String, Any>, res: WebInoResponse):
+    res.download("{}", "export.bin")
+
+app.get("/download", download)
+app.listen_once("127.0.0.1", {})
+"#,
+            script_file_path, port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .write_all(b"GET /download HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    let headers = String::from_utf8_lossy(&response[..split]);
+    let body = &response[split + 4..];
+    assert!(headers.starts_with("HTTP/1.1 200 OK"));
+    assert!(headers.contains("Content-Length: 6"));
+    assert!(headers.contains("Content-Type: application/octet-stream"));
+    assert!(headers.contains("Content-Disposition: attachment; filename=\"export.bin\""));
+    assert_eq!(body, file_bytes.as_slice());
+    server_handle.join().unwrap().unwrap();
+}

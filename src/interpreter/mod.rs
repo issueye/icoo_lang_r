@@ -1089,7 +1089,10 @@ impl Interpreter {
                 )
             }
             Value::WebInoResponse(_) => {
-                matches!(name, "status" | "send" | "json" | "write" | "end")
+                matches!(
+                    name,
+                    "status" | "send" | "json" | "write" | "end" | "download"
+                )
             }
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
             Value::Bool(_) => matches!(name, "to_int"),
@@ -1600,7 +1603,9 @@ impl Interpreter {
                     ));
                 }
                 response_ref.body = args[0].display();
+                response_ref.body_bytes = None;
                 response_ref.chunks.clear();
+                response_ref.headers.clear();
                 response_ref.content_type = "text/plain; charset=utf-8".to_string();
                 response_ref.sent = true;
                 response_ref.streaming = false;
@@ -1623,8 +1628,52 @@ impl Interpreter {
                     ));
                 }
                 response_ref.body = body;
+                response_ref.body_bytes = None;
                 response_ref.chunks.clear();
+                response_ref.headers.clear();
                 response_ref.content_type = "application/json; charset=utf-8".to_string();
+                response_ref.sent = true;
+                response_ref.streaming = false;
+                Ok(Value::Nil)
+            }
+            "download" => {
+                if !(1..=2).contains(&args.len()) {
+                    return Err(IcooError::runtime(
+                        "download() expects 1..2 arguments",
+                        Some(span),
+                    ));
+                }
+                let path = expect_string(&args[0], span)?;
+                let filename = if args.len() == 2 {
+                    expect_string(&args[1], span)?
+                } else {
+                    web_ino_download_filename(&path)
+                };
+                let bytes = std::fs::read(&path).map_err(|err| {
+                    IcooError::runtime(
+                        format!("web response download() failed: {}", err),
+                        Some(span),
+                    )
+                })?;
+                let mut response_ref = response.borrow_mut();
+                if response_ref.headers_sent {
+                    return Err(IcooError::runtime(
+                        "cannot download file after streaming has started",
+                        Some(span),
+                    ));
+                }
+                response_ref.body = String::new();
+                response_ref.body_bytes = Some(bytes);
+                response_ref.chunks.clear();
+                response_ref.content_type = web_ino_download_content_type(&path).to_string();
+                response_ref.headers.clear();
+                response_ref.headers.insert(
+                    "Content-Disposition".to_string(),
+                    format!(
+                        "attachment; filename=\"{}\"",
+                        web_ino_escape_header_value(&filename)
+                    ),
+                );
                 response_ref.sent = true;
                 response_ref.streaming = false;
                 Ok(Value::Nil)
@@ -1752,23 +1801,23 @@ impl Interpreter {
                     let response = WebInoResponse {
                         status: 400,
                         body: message,
+                        body_bytes: None,
                         chunks: Vec::new(),
                         content_type: "text/plain; charset=utf-8".to_string(),
+                        headers: HashMap::new(),
                         sent: true,
                         streaming: false,
                         headers_sent: false,
                         stream_ended: false,
                         writer: None,
                     };
-                    let response_text = web_ino_http_response(&response);
-                    std::io::Write::write_all(&mut stream, response_text.as_bytes()).map_err(
-                        |err| {
-                            IcooError::runtime(
-                                format!("web.ino response write failed: {}", err),
-                                Some(span),
-                            )
-                        },
-                    )?;
+                    let response_bytes = web_ino_http_response(&response);
+                    std::io::Write::write_all(&mut stream, &response_bytes).map_err(|err| {
+                        IcooError::runtime(
+                            format!("web.ino response write failed: {}", err),
+                            Some(span),
+                        )
+                    })?;
                 }
                 WebInoAccepted::AcceptError(message) => {
                     let _ = accept_handle.join();
@@ -1809,8 +1858,10 @@ impl Interpreter {
         let response = Rc::new(RefCell::new(WebInoResponse {
             status: 200,
             body: String::new(),
+            body_bytes: None,
             chunks: Vec::new(),
             content_type: "text/plain; charset=utf-8".to_string(),
+            headers: HashMap::new(),
             sent: false,
             streaming: false,
             headers_sent: false,
@@ -1842,8 +1893,8 @@ impl Interpreter {
             web_ino_end_stream(&mut response_ref, span)?;
             return Ok(());
         }
-        let response_text = web_ino_http_response(&response.borrow());
-        std::io::Write::write_all(stream, response_text.as_bytes()).map_err(|err| {
+        let response_bytes = web_ino_http_response(&response.borrow());
+        std::io::Write::write_all(stream, &response_bytes).map_err(|err| {
             IcooError::runtime(
                 format!("web.ino response write failed: {}", err),
                 Some(span),
@@ -3447,10 +3498,17 @@ fn web_ino_write_stream_chunk(
 
 fn web_ino_write_stream_headers(response: &mut WebInoResponse, span: Span) -> IcooResult<()> {
     let status_text = http_status_text(response.status);
-    let headers = format!(
-        "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+    let mut headers = format!(
+        "HTTP/1.1 {} {}\r\nTransfer-Encoding: chunked\r\nContent-Type: {}\r\nConnection: close\r\n",
         response.status, status_text, response.content_type
     );
+    for (name, value) in &response.headers {
+        headers.push_str(name);
+        headers.push_str(": ");
+        headers.push_str(value);
+        headers.push_str("\r\n");
+    }
+    headers.push_str("\r\n");
     if let Some(writer) = response.writer.clone() {
         std::io::Write::write_all(&mut *writer.borrow_mut(), headers.as_bytes()).map_err(
             |err| {
@@ -3486,21 +3544,70 @@ fn web_ino_end_stream(response: &mut WebInoResponse, span: Span) -> IcooResult<(
     Ok(())
 }
 
-fn web_ino_http_response(response: &WebInoResponse) -> String {
-    let body = if response.streaming {
-        response.chunks.join("")
+fn web_ino_http_response(response: &WebInoResponse) -> Vec<u8> {
+    let body = if let Some(bytes) = &response.body_bytes {
+        bytes.clone()
+    } else if response.streaming {
+        response.chunks.join("").into_bytes()
     } else {
-        response.body.clone()
+        response.body.clone().into_bytes()
     };
     let status_text = http_status_text(response.status);
-    format!(
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n{}",
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n",
         response.status,
         status_text,
-        body.as_bytes().len(),
-        response.content_type,
-        body
-    )
+        body.len(),
+        response.content_type
+    );
+    for (name, value) in &response.headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn web_ino_download_filename(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("download")
+        .to_string()
+}
+
+fn web_ino_download_content_type(path: &str) -> &'static str {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "txt" | "log" | "md" => "text/plain; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "json" => "application/json",
+        "csv" => "text/csv; charset=utf-8",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
+fn web_ino_escape_header_value(value: &str) -> String {
+    value
+        .replace(['\r', '\n'], "_")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 fn http_status_text(status: i64) -> &'static str {

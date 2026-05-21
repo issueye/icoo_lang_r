@@ -392,8 +392,10 @@ pub struct WebInoRoute {
 pub struct WebInoResponse {
     pub status: i64,
     pub body: String,
+    pub body_bytes: Option<Vec<u8>>,
     pub chunks: Vec<String>,
     pub content_type: String,
+    pub headers: HashMap<String, String>,
     pub sent: bool,
     pub streaming: bool,
     pub headers_sent: bool,

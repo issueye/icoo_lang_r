@@ -992,7 +992,7 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
             Some(TypeInfo::known("Nil"))
         }
         ("WebInoResponse", "status" | "write") => Some(TypeInfo::known("WebInoResponse")),
-        ("WebInoResponse", "send" | "json" | "end") => Some(TypeInfo::known("Nil")),
+        ("WebInoResponse", "send" | "json" | "end" | "download") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1213,6 +1213,12 @@ fn native_method_sig(
         ("WebInoResponse", "end") => {
             Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
         }
+        ("WebInoResponse", "download") => Some(native_sig(
+            NativeArity::Range { min: 1, max: 2 },
+            vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
         ("EventLoop", "spawn") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Coroutine")],

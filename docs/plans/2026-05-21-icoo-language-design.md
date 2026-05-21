@@ -1407,6 +1407,8 @@ res.send(value: Any) -> Nil
 res.json(value: Any) -> Nil
 res.write(value: Any) -> WebInoResponse
 res.end() -> Nil
+res.download(path: String) -> Nil
+res.download(path: String, filename: String) -> Nil
 ```
 
 `std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。第一版使用精确路径匹配，handler 接收两个参数：
@@ -1433,6 +1435,13 @@ fn stream(req: Map<String, Any>, res: WebInoResponse):
     res.write(" ")
     res.write(req.get("path"))
     res.end()
+```
+
+`res.download` 用于文件下载，会读取本地文件并设置 `Content-Disposition: attachment`、`Content-Length` 和基础 `Content-Type`。第二个参数可指定浏览器下载时使用的文件名；省略时使用路径中的文件名。下载响应支持字节内容，适合返回图片、压缩包、PDF 等文件。
+
+```python
+fn export_file(req: Map<String, Any>, res: WebInoResponse):
+    res.download("storage/report.pdf", "report.pdf")
 ```
 
 `listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
