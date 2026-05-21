@@ -1024,4 +1024,12 @@ app.listen("127.0.0.1", 1, 0)
 "#)
     .unwrap_err();
     assert!(err.contains("max_requests must be positive"));
+
+    let err = run(r#"
+import "std.web.ino" as ino
+let app = ino.App()
+app.listen_with_workers("127.0.0.1", 1, 1, 0)
+"#)
+    .unwrap_err();
+    assert!(err.contains("workers must be positive"));
 }

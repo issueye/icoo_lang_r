@@ -36,7 +36,10 @@ fn http_get(port: u16, path: &str) -> Result<String, String> {
 #[test]
 #[ignore = "manual performance test: run with `cargo test --test web_ino_perf -- --ignored --nocapture`"]
 fn web_ino_handles_concurrent_requests_perf() {
-    let request_count = 64;
+    let request_count = 256;
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
     let dir = PathBuf::from("target/icoo_perf_tests/web_ino");
     fs::create_dir_all(&dir).unwrap();
     let port = free_port();
@@ -53,9 +56,9 @@ fn ping(req: Map<String, Any>, res: WebInoResponse):
     res.send("ok:" + req.get("path"))
 
 app.get("/ping", ping)
-app.listen("127.0.0.1", {}, {})
+app.listen_with_workers("127.0.0.1", {}, {}, {})
 "#,
-            port, request_count
+            port, request_count, workers
         ),
     )
     .unwrap();
@@ -87,8 +90,9 @@ app.listen("127.0.0.1", {}, {})
 
     let throughput = successes as f64 / elapsed.as_secs_f64();
     eprintln!(
-        "web_ino_perf: requests={}, elapsed_ms={}, throughput_rps={:.2}",
+        "web_ino_perf: requests={}, workers={}, elapsed_ms={}, throughput_rps={:.2}",
         successes,
+        workers,
         elapsed.as_millis(),
         throughput
     );

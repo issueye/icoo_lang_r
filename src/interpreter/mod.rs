@@ -1082,7 +1082,12 @@ impl Interpreter {
                     | "backend_name"
                     | "worker_threads"
             ),
-            Value::WebInoApp(_) => matches!(name, "get" | "post" | "listen_once" | "listen"),
+            Value::WebInoApp(_) => {
+                matches!(
+                    name,
+                    "get" | "post" | "listen_once" | "listen" | "listen_with_workers"
+                )
+            }
             Value::WebInoResponse(_) => matches!(name, "status" | "send" | "json"),
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
             Value::Bool(_) => matches!(name, "to_int"),
@@ -1502,7 +1507,48 @@ impl Interpreter {
                         Some(span),
                     ));
                 }
-                self.web_ino_listen(app, &host, port as u16, max_requests as usize, span)?;
+                let workers = std::thread::available_parallelism()
+                    .map(|count| count.get())
+                    .unwrap_or(1);
+                self.web_ino_listen(
+                    app,
+                    &host,
+                    port as u16,
+                    max_requests as usize,
+                    workers,
+                    span,
+                )?;
+                Ok(Value::Nil)
+            }
+            "listen_with_workers" => {
+                expect_arity(&args, 4, span)?;
+                let host = expect_string(&args[0], span)?;
+                let port = expect_int(&args[1], span)?;
+                let max_requests = expect_int(&args[2], span)?;
+                let workers = expect_int(&args[3], span)?;
+                if !(1..=65535).contains(&port) {
+                    return Err(IcooError::runtime(
+                        "server port must be between 1 and 65535",
+                        Some(span),
+                    ));
+                }
+                if max_requests <= 0 {
+                    return Err(IcooError::runtime(
+                        "max_requests must be positive",
+                        Some(span),
+                    ));
+                }
+                if workers <= 0 {
+                    return Err(IcooError::runtime("workers must be positive", Some(span)));
+                }
+                self.web_ino_listen(
+                    app,
+                    &host,
+                    port as u16,
+                    max_requests as usize,
+                    workers as usize,
+                    span,
+                )?;
                 Ok(Value::Nil)
             }
             _ => Err(IcooError::runtime("unknown WebInoApp method", Some(span))),
@@ -1578,6 +1624,11 @@ impl Interpreter {
                 Some(span),
             )
         })?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|err| {
+                IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
+            })?;
         let mut buffer = [0_u8; 8192];
         let size = std::io::Read::read(&mut stream, &mut buffer).map_err(|err| {
             IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
@@ -1592,27 +1643,30 @@ impl Interpreter {
         host: &str,
         port: u16,
         max_requests: usize,
+        workers: usize,
         span: Span,
     ) -> IcooResult<()> {
         let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
             IcooError::runtime(format!("web.ino listen bind failed: {}", err), Some(span))
         })?;
-        let (tx, rx) = std::sync::mpsc::channel();
+        let workers = workers.max(1).min(max_requests);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let (stream_tx, stream_rx) = std::sync::mpsc::channel();
+        let stream_rx = std::sync::Arc::new(std::sync::Mutex::new(stream_rx));
+        let accept_result_tx = result_tx.clone();
         let accept_handle = std::thread::spawn(move || {
             for _ in 0..max_requests {
                 match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let tx = tx.clone();
-                        std::thread::spawn(move || {
-                            let mut buffer = [0_u8; 8192];
-                            let request = std::io::Read::read(&mut stream, &mut buffer)
-                                .map(|size| String::from_utf8_lossy(&buffer[..size]).into_owned())
-                                .map_err(|err| format!("web.ino request read failed: {}", err));
-                            let _ = tx.send(WebInoAccepted::Request { request, stream });
-                        });
+                    Ok((stream, _)) => {
+                        if stream_tx.send(stream).is_err() {
+                            let _ = accept_result_tx.send(WebInoAccepted::AcceptError(
+                                "web.ino listen worker queue closed".to_string(),
+                            ));
+                            break;
+                        }
                     }
                     Err(err) => {
-                        let _ = tx.send(WebInoAccepted::AcceptError(format!(
+                        let _ = accept_result_tx.send(WebInoAccepted::AcceptError(format!(
                             "web.ino listen accept failed: {}",
                             err
                         )));
@@ -1621,9 +1675,34 @@ impl Interpreter {
                 }
             }
         });
+        let mut worker_handles = Vec::new();
+        for _ in 0..workers {
+            let stream_rx = stream_rx.clone();
+            let result_tx = result_tx.clone();
+            worker_handles.push(std::thread::spawn(move || loop {
+                let stream = {
+                    let stream_rx = stream_rx.lock().expect("web.ino worker queue poisoned");
+                    stream_rx.recv()
+                };
+                let Ok(mut stream) = stream else {
+                    break;
+                };
+                let request = stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .map_err(|err| format!("web.ino request read failed: {}", err))
+                    .and_then(|_| {
+                        let mut buffer = [0_u8; 8192];
+                        std::io::Read::read(&mut stream, &mut buffer)
+                            .map(|size| String::from_utf8_lossy(&buffer[..size]).into_owned())
+                            .map_err(|err| format!("web.ino request read failed: {}", err))
+                    });
+                let _ = result_tx.send(WebInoAccepted::Request { request, stream });
+            }));
+        }
+        drop(result_tx);
 
         for _ in 0..max_requests {
-            match rx.recv().map_err(|err| {
+            match result_rx.recv().map_err(|err| {
                 IcooError::runtime(format!("web.ino listen failed: {}", err), Some(span))
             })? {
                 WebInoAccepted::Request {
@@ -1659,6 +1738,11 @@ impl Interpreter {
         accept_handle
             .join()
             .map_err(|_| IcooError::runtime("web.ino listen accept thread panicked", Some(span)))?;
+        for worker_handle in worker_handles {
+            worker_handle.join().map_err(|_| {
+                IcooError::runtime("web.ino listen worker thread panicked", Some(span))
+            })?;
+        }
         Ok(())
     }
 
