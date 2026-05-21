@@ -1,0 +1,20 @@
+async fn worker(name: String) -> String:
+    print(name + ": start")
+    let delay = sleep(0)
+    await delay
+    print(name + ": end")
+    return name
+
+async fn main() -> String:
+    let loop = current_loop()
+    let a = loop.spawn(worker("A"))
+    let b = loop.spawn(worker("B"))
+    let av = await a
+    let bv = await b
+    return av + "+" + bv
+
+let loop = EventLoop(2)
+let task = loop.spawn(main())
+print(loop.backend_name())
+print(loop.worker_threads().to_string())
+print(loop.run_until(task))

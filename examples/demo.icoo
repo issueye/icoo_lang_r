@@ -1,0 +1,57 @@
+const PI: Float = 3.14159
+
+let count = 10
+final runtime_id: String
+runtime_id = "icoo-" + count.to_string()
+
+fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+class Animal:
+    let name: String
+
+    fn init(self, name: String):
+        self.name = name
+
+    fn speak(self):
+        print("...")
+
+class Dog <- Animal:
+    let breed: String
+    final owner_id: String
+    const KIND: String = "dog"
+
+    fn init(self, name: String, breed: String, owner_id: String):
+        super.init(name)
+        self.breed = breed
+        self.owner_id = owner_id
+
+    fn speak(self):
+        print(self.name + " says woof")
+
+    fn to_string(self) -> String:
+        return "Dog(" + self.name + ", " + self.breed + ")"
+
+let dog = Dog("Lucky", "Border Collie", "U001")
+dog.speak()
+print(dog.to_string())
+print(runtime_id)
+print(add(2, 3).to_string())
+
+let values = [1, 2, 3]
+values.push(4)
+print(values.join("-"))
+print(values.index_of(3).to_string())
+
+let scores = {"Tom": 95, "Lucy": 88}
+scores.set("Ana", 91)
+print(scores.has("Tom").to_string())
+print(scores.size().to_string())
+
+let title = "Icoo"
+let message = f"""
+Language: {title}
+Runtime: {runtime_id}
+"""
+print(message.contains("Language: Icoo").to_string())
+print(f"escaped braces: {{title}}")

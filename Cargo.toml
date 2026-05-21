@@ -1,0 +1,15 @@
+[package]
+name = "icoo_lang_r"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "icoo_lang_r"
+path = "src/lib.rs"
+
+[[bin]]
+name = "icoo"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }

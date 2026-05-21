@@ -1,0 +1,1962 @@
+use crate::error::{IcooError, IcooResult};
+use crate::lexer::token::Span;
+use crate::parser::ast::*;
+use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::value::*;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+pub struct Interpreter {
+    env: EnvRef,
+    output: Box<dyn FnMut(String)>,
+    current_loop: Option<Rc<RefCell<IcooEventLoop>>>,
+    current_task: Option<Rc<RefCell<IcooTask>>>,
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Interpreter {
+    pub fn new() -> Self {
+        Self::with_output(|line| println!("{}", line))
+    }
+
+    pub fn with_output<F>(output: F) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        let env = Environment::new();
+        let mut interpreter = Self {
+            env,
+            output: Box::new(output),
+            current_loop: None,
+            current_task: None,
+        };
+        interpreter.install_natives();
+        interpreter
+    }
+
+    pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {
+        for stmt in &program.statements {
+            self.execute(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn install_natives(&mut self) {
+        for (name, arity) in [
+            ("print", 1),
+            ("len", 1),
+            ("str", 1),
+            ("int", 1),
+            ("float", 1),
+            ("type", 1),
+            ("EventLoop", 0),
+            ("current_loop", 0),
+            ("sleep", 1),
+        ] {
+            self.env.borrow_mut().define(
+                name.to_string(),
+                Value::NativeFunction(Rc::new(NativeFunction {
+                    name: name.to_string(),
+                    arity,
+                })),
+                true,
+                BindingKind::Const,
+            );
+        }
+    }
+
+    fn execute(&mut self, stmt: &Stmt) -> IcooResult<()> {
+        match stmt {
+            Stmt::Let(decl) => self.define_binding(decl, BindingKind::Mutable),
+            Stmt::Const(decl) => self.define_binding(decl, BindingKind::Const),
+            Stmt::Final(decl) => self.define_binding(decl, BindingKind::Final),
+            Stmt::Function(decl) => {
+                let function = IcooFunction {
+                    decl: decl.clone(),
+                    closure: self.env.clone(),
+                    bound_self: None,
+                    is_initializer: false,
+                };
+                self.env.borrow_mut().define(
+                    decl.name.name.clone(),
+                    Value::Function(Rc::new(function)),
+                    true,
+                    BindingKind::Const,
+                );
+                Ok(())
+            }
+            Stmt::Class(decl) => self.execute_class(decl),
+            Stmt::If {
+                condition,
+                then_branch,
+                elifs,
+                else_branch,
+            } => {
+                if self.eval(condition)?.truthy() {
+                    self.execute_block(then_branch, Environment::child(self.env.clone()))
+                } else {
+                    for (condition, body) in elifs {
+                        if self.eval(condition)?.truthy() {
+                            return self.execute_block(body, Environment::child(self.env.clone()));
+                        }
+                    }
+                    if let Some(body) = else_branch {
+                        self.execute_block(body, Environment::child(self.env.clone()))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+            Stmt::While { condition, body } => {
+                while self.eval(condition)?.truthy() {
+                    match self.execute_block(body, Environment::child(self.env.clone())) {
+                        Err(IcooError::Break) => break,
+                        Err(IcooError::Continue) => continue,
+                        other => other?,
+                    }
+                }
+                Ok(())
+            }
+            Stmt::Return { value, .. } => {
+                let value = if let Some(value) = value {
+                    self.eval(value)?
+                } else {
+                    Value::Nil
+                };
+                Err(IcooError::Return(value))
+            }
+            Stmt::Yield { span, .. } => Err(IcooError::runtime(
+                "yield can only be used inside an async fn",
+                Some(*span),
+            )),
+            Stmt::Break(_) => Err(IcooError::Break),
+            Stmt::Continue(_) => Err(IcooError::Continue),
+            Stmt::Expr(expr) => {
+                self.eval(expr)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn define_binding(&mut self, decl: &BindingDecl, kind: BindingKind) -> IcooResult<()> {
+        let (value, initialized) = if let Some(initializer) = &decl.initializer {
+            let value = self.eval(initializer)?;
+            if let Some(type_hint) = &decl.type_hint {
+                check_value_type(
+                    &value,
+                    type_hint,
+                    &format!("binding '{}'", decl.name.name),
+                    decl.name.span,
+                )?;
+            }
+            (value, true)
+        } else {
+            (Value::Nil, false)
+        };
+        self.env
+            .borrow_mut()
+            .define(decl.name.name.clone(), value, initialized, kind);
+        Ok(())
+    }
+
+    fn execute_class(&mut self, decl: &ClassDecl) -> IcooResult<()> {
+        let superclass = if let Some(super_name) = &decl.superclass {
+            match self.env.borrow().get(&super_name.name, super_name.span)? {
+                Value::Class(class) => Some(class),
+                _ => {
+                    return Err(IcooError::runtime(
+                        format!("superclass '{}' is not a class", super_name.name),
+                        Some(super_name.span),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut seen = HashSet::new();
+        if let Some(superclass) = &superclass {
+            for field in superclass.all_fields() {
+                seen.insert(field.name);
+            }
+        }
+        let mut fields = Vec::new();
+        for field in &decl.fields {
+            if !seen.insert(field.name.name.clone()) {
+                return Err(IcooError::runtime(
+                    format!(
+                        "field '{}' is already declared in this inheritance chain",
+                        field.name.name
+                    ),
+                    Some(field.name.span),
+                ));
+            }
+            fields.push(FieldDef {
+                name: field.name.name.clone(),
+                kind: field.kind,
+                type_hint: field.type_hint.clone(),
+                initializer: field.initializer.clone(),
+            });
+        }
+
+        let method_closure = if let Some(superclass) = &superclass {
+            let env = Environment::child(self.env.clone());
+            env.borrow_mut().define(
+                "super".to_string(),
+                Value::Class(superclass.clone()),
+                true,
+                BindingKind::Const,
+            );
+            env
+        } else {
+            self.env.clone()
+        };
+
+        let mut methods = HashMap::new();
+        for method in &decl.methods {
+            methods.insert(
+                method.name.name.clone(),
+                Rc::new(IcooFunction {
+                    decl: method.clone(),
+                    closure: method_closure.clone(),
+                    bound_self: None,
+                    is_initializer: method.name.name == "init",
+                }),
+            );
+        }
+
+        let class = Rc::new(IcooClass {
+            name: decl.name.name.clone(),
+            superclass,
+            fields,
+            methods,
+        });
+        self.env.borrow_mut().define(
+            decl.name.name.clone(),
+            Value::Class(class),
+            true,
+            BindingKind::Const,
+        );
+        Ok(())
+    }
+
+    fn execute_block(&mut self, statements: &[Stmt], env: EnvRef) -> IcooResult<()> {
+        let previous = self.env.clone();
+        self.env = env;
+        let mut result = Ok(());
+        for stmt in statements {
+            if let Err(err) = self.execute(stmt) {
+                result = Err(err);
+                break;
+            }
+        }
+        self.env = previous;
+        result
+    }
+
+    fn eval(&mut self, expr: &Expr) -> IcooResult<Value> {
+        match expr {
+            Expr::Literal(literal, _) => Ok(match literal {
+                Literal::Nil => Value::Nil,
+                Literal::Bool(value) => Value::Bool(*value),
+                Literal::Int(value) => Value::Int(*value),
+                Literal::Float(value) => Value::Float(*value),
+                Literal::String(value) => Value::String(value.clone()),
+            }),
+            Expr::Variable(name) => self.env.borrow().get(&name.name, name.span),
+            Expr::Self_(span) => self.env.borrow().get("self", *span),
+            Expr::Super(span) => self.env.borrow().get("super", *span),
+            Expr::Array(values, _) => {
+                let mut result = Vec::new();
+                for value in values {
+                    result.push(self.eval(value)?);
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            Expr::Map(entries, _) => {
+                let mut result = HashMap::new();
+                for (key, value) in entries {
+                    result.insert(key.clone(), self.eval(value)?);
+                }
+                Ok(Value::Map(Rc::new(RefCell::new(result))))
+            }
+            Expr::Template(parts, _) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        TemplatePart::Text(text) => result.push_str(text),
+                        TemplatePart::Expr(expr) => result.push_str(&self.eval(expr)?.display()),
+                    }
+                }
+                Ok(Value::String(result))
+            }
+            Expr::Unary { op, right, span } => {
+                let right = self.eval(right)?;
+                match op {
+                    UnaryOp::Not => Ok(Value::Bool(!right.truthy())),
+                    UnaryOp::Negate => match right {
+                        Value::Int(value) => Ok(Value::Int(-value)),
+                        Value::Float(value) => Ok(Value::Float(-value)),
+                        _ => Err(IcooError::runtime("operand must be a number", Some(*span))),
+                    },
+                }
+            }
+            Expr::Binary {
+                left,
+                op,
+                right,
+                span,
+            } => {
+                let left = self.eval(left)?;
+                let right = self.eval(right)?;
+                self.eval_binary(left, *op, right, *span)
+            }
+            Expr::Logical {
+                left, op, right, ..
+            } => {
+                let left = self.eval(left)?;
+                match op {
+                    LogicalOp::Or if left.truthy() => Ok(left),
+                    LogicalOp::And if !left.truthy() => Ok(left),
+                    _ => self.eval(right),
+                }
+            }
+            Expr::Assign {
+                target,
+                value,
+                span,
+            } => {
+                let value = self.eval(value)?;
+                match target.as_ref() {
+                    Expr::Variable(name) => {
+                        self.env
+                            .borrow_mut()
+                            .assign(&name.name, value.clone(), *span)?;
+                        Ok(value)
+                    }
+                    Expr::Get { object, name, .. } => {
+                        let object = self.eval(object)?;
+                        self.set_property(object, &name.name, value.clone(), *span)?;
+                        Ok(value)
+                    }
+                    _ => Err(IcooError::runtime("invalid assignment target", Some(*span))),
+                }
+            }
+            Expr::Get { object, name, span } => {
+                if matches!(object.as_ref(), Expr::Super(_)) {
+                    return self.eval_super_get(&name.name, *span);
+                }
+                let object = self.eval(object)?;
+                self.get_property(object, &name.name, *span)
+            }
+            Expr::Call { callee, args, span } => {
+                let callee = self.eval(callee)?;
+                let mut values = Vec::new();
+                for arg in args {
+                    values.push(self.eval(arg)?);
+                }
+                self.call_value(callee, values, *span)
+            }
+            Expr::Await { task, span } => {
+                if self.current_task.is_none() {
+                    return Err(IcooError::runtime(
+                        "await can only be used inside an async fn",
+                        Some(*span),
+                    ));
+                }
+                let value = self.eval(task)?;
+                let Value::Task(task) = value else {
+                    return Err(IcooError::runtime("await expects a Task", Some(*span)));
+                };
+                let state = task.borrow().state;
+                match state {
+                    TaskState::Done => {
+                        let result = task.borrow().result.clone().unwrap_or(Value::Nil);
+                        Ok(result)
+                    }
+                    TaskState::Failed => {
+                        let error = task
+                            .borrow()
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "task failed".to_string());
+                        Err(IcooError::runtime(error, Some(*span)))
+                    }
+                    TaskState::Cancelled => {
+                        Err(IcooError::runtime("task was cancelled", Some(*span)))
+                    }
+                    _ => Err(IcooError::Await(Value::Task(task))),
+                }
+            }
+        }
+    }
+
+    fn eval_binary(
+        &self,
+        left: Value,
+        op: BinaryOp,
+        right: Value,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match op {
+            BinaryOp::Add => match (left, right) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
+                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
+                (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
+                (Value::String(a), b) => Ok(Value::String(a + &b.display())),
+                (a, Value::String(b)) => Ok(Value::String(a.display() + &b)),
+                _ => Err(IcooError::runtime(
+                    "operands must be numbers or strings",
+                    Some(span),
+                )),
+            },
+            BinaryOp::Subtract => numeric(left, right, span, |a, b| a - b, |a, b| a - b),
+            BinaryOp::Multiply => numeric(left, right, span, |a, b| a * b, |a, b| a * b),
+            BinaryOp::Divide => numeric_float(left, right, span, |a, b| a / b),
+            BinaryOp::Remainder => numeric(left, right, span, |a, b| a % b, |a, b| a % b),
+            BinaryOp::Equal => Ok(Value::Bool(value_equal(&left, &right))),
+            BinaryOp::NotEqual => Ok(Value::Bool(!value_equal(&left, &right))),
+            BinaryOp::Less => compare(left, right, span, |a, b| a < b),
+            BinaryOp::LessEqual => compare(left, right, span, |a, b| a <= b),
+            BinaryOp::Greater => compare(left, right, span, |a, b| a > b),
+            BinaryOp::GreaterEqual => compare(left, right, span, |a, b| a >= b),
+        }
+    }
+
+    fn get_property(&mut self, object: Value, name: &str, span: Span) -> IcooResult<Value> {
+        if let Value::Instance(instance) = &object {
+            let field = instance.borrow().fields.get(name).cloned();
+            if let Some(field) = field {
+                if !field.initialized {
+                    return Err(IcooError::runtime(
+                        format!("field '{}' is not initialized", name),
+                        Some(span),
+                    ));
+                }
+                return Ok(field.value);
+            }
+            if let Some(method) = instance.borrow().class.find_method(name) {
+                let bound = method.bind(Value::Instance(instance.clone()));
+                return Ok(Value::Function(Rc::new(bound)));
+            }
+        }
+        if self.has_native_method(&object, name) {
+            return Ok(Value::NativeMethod(Rc::new(NativeMethod {
+                name: name.to_string(),
+                receiver: object,
+            })));
+        }
+        Err(IcooError::runtime(
+            format!(
+                "type '{}' has no property or method '{}'",
+                object.type_name(),
+                name
+            ),
+            Some(span),
+        ))
+    }
+
+    fn set_property(
+        &mut self,
+        object: Value,
+        name: &str,
+        value: Value,
+        span: Span,
+    ) -> IcooResult<()> {
+        let Value::Instance(instance) = object else {
+            return Err(IcooError::runtime("only instances have fields", Some(span)));
+        };
+        let mut instance_ref = instance.borrow_mut();
+        let Some(field) = instance_ref.fields.get_mut(name) else {
+            return Err(IcooError::runtime(
+                format!(
+                    "cannot assign undeclared field '{}' on class '{}'",
+                    name, instance_ref.class.name
+                ),
+                Some(span),
+            ));
+        };
+        match field.kind {
+            FieldKind::Mutable => {
+                check_value_type(&value, &field.type_hint, &format!("field '{}'", name), span)?;
+                field.value = value;
+                field.initialized = true;
+                Ok(())
+            }
+            FieldKind::Const => Err(IcooError::runtime(
+                format!("cannot assign const field '{}'", name),
+                Some(span),
+            )),
+            FieldKind::Final if !field.initialized => {
+                check_value_type(&value, &field.type_hint, &format!("field '{}'", name), span)?;
+                field.value = value;
+                field.initialized = true;
+                Ok(())
+            }
+            FieldKind::Final => Err(IcooError::runtime(
+                format!("final field '{}' can only be assigned once", name),
+                Some(span),
+            )),
+        }
+    }
+
+    fn eval_super_get(&mut self, name: &str, span: Span) -> IcooResult<Value> {
+        let superclass = match self.env.borrow().get("super", span)? {
+            Value::Class(class) => class,
+            _ => return Err(IcooError::runtime("'super' is not a class", Some(span))),
+        };
+        let receiver = self.env.borrow().get("self", span)?;
+        let Some(method) = superclass.find_method(name) else {
+            return Err(IcooError::runtime(
+                format!("undefined superclass method '{}'", name),
+                Some(span),
+            ));
+        };
+        Ok(Value::Function(Rc::new(method.bind(receiver))))
+    }
+
+    fn call_value(&mut self, callee: Value, args: Vec<Value>, span: Span) -> IcooResult<Value> {
+        match callee {
+            Value::Function(function) => self.call_function(function, args, span),
+            Value::NativeFunction(function) => self.call_native_function(&function, args, span),
+            Value::NativeMethod(method) => self.call_native_method(&method, args, span),
+            Value::Class(class) => self.call_class(class, args, span),
+            _ => Err(IcooError::runtime(
+                format!("type '{}' is not callable", callee.type_name()),
+                Some(span),
+            )),
+        }
+    }
+
+    fn call_function(
+        &mut self,
+        function: Rc<IcooFunction>,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        let bound_offset = usize::from(function.bound_self.is_some());
+        let expected = function.decl.params.len().saturating_sub(bound_offset);
+        if args.len() != expected {
+            return Err(IcooError::runtime(
+                format!("expected {} arguments but got {}", expected, args.len()),
+                Some(span),
+            ));
+        }
+
+        let env = Environment::child(function.closure.clone());
+        let mut arg_index = 0;
+        for (param_index, param) in function.decl.params.iter().enumerate() {
+            if param_index == 0 {
+                if let Some(receiver) = &function.bound_self {
+                    if let Some(type_hint) = &param.type_hint {
+                        check_value_type(
+                            receiver,
+                            type_hint,
+                            &format!("parameter '{}'", param.name.name),
+                            span,
+                        )?;
+                    }
+                    env.borrow_mut().define(
+                        param.name.name.clone(),
+                        receiver.clone(),
+                        true,
+                        BindingKind::Const,
+                    );
+                    continue;
+                }
+            }
+            let arg = args[arg_index].clone();
+            if let Some(type_hint) = &param.type_hint {
+                check_value_type(
+                    &arg,
+                    type_hint,
+                    &format!("parameter '{}'", param.name.name),
+                    span,
+                )?;
+            }
+            env.borrow_mut()
+                .define(param.name.name.clone(), arg, true, BindingKind::Mutable);
+            arg_index += 1;
+        }
+
+        if function.decl.is_coroutine {
+            return Ok(Value::Coroutine(Rc::new(RefCell::new(IcooCoroutine {
+                name: function.decl.name.name.clone(),
+                return_type: function.decl.return_type.clone(),
+                env,
+                instructions: compile_coroutine_body(&function.decl.body),
+                pc: 0,
+                owner_task: None,
+            }))));
+        }
+
+        let result = self.execute_block(&function.decl.body, env);
+        match result {
+            Err(IcooError::Return(value)) => {
+                if function.is_initializer {
+                    Ok(function.bound_self.clone().unwrap_or(Value::Nil))
+                } else {
+                    self.check_function_return(&function, &value, span)?;
+                    Ok(value)
+                }
+            }
+            Err(err) => Err(err),
+            Ok(()) if function.is_initializer => {
+                Ok(function.bound_self.clone().unwrap_or(Value::Nil))
+            }
+            Ok(()) => {
+                self.check_function_return(&function, &Value::Nil, span)?;
+                Ok(Value::Nil)
+            }
+        }
+    }
+
+    fn check_function_return(
+        &self,
+        function: &IcooFunction,
+        value: &Value,
+        span: Span,
+    ) -> IcooResult<()> {
+        if let Some(return_type) = &function.decl.return_type {
+            check_value_type(
+                value,
+                return_type,
+                &format!("return value of '{}'", function.decl.name.name),
+                span,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn call_class(
+        &mut self,
+        class: Rc<IcooClass>,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        let fields = class.all_fields();
+        let mut instance_fields = HashMap::new();
+        for field in &fields {
+            instance_fields.insert(
+                field.name.clone(),
+                FieldValue {
+                    value: Value::Nil,
+                    initialized: false,
+                    kind: field.kind,
+                    type_hint: field.type_hint.clone(),
+                },
+            );
+        }
+        let instance = Rc::new(RefCell::new(Instance {
+            class: class.clone(),
+            fields: instance_fields,
+        }));
+        let receiver = Value::Instance(instance.clone());
+
+        for field in &fields {
+            if let Some(initializer) = &field.initializer {
+                let value = self.eval(initializer)?;
+                check_value_type(
+                    &value,
+                    &field.type_hint,
+                    &format!("field '{}'", field.name),
+                    span,
+                )?;
+                let mut instance_ref = instance.borrow_mut();
+                let Some(slot) = instance_ref.fields.get_mut(&field.name) else {
+                    return Err(IcooError::runtime(
+                        format!("internal error: missing field '{}'", field.name),
+                        Some(span),
+                    ));
+                };
+                slot.value = value;
+                slot.initialized = true;
+            }
+        }
+
+        if let Some(init) = class.find_method("init") {
+            let bound = init.bind(receiver.clone());
+            self.call_function(Rc::new(bound), args, span)?;
+        } else if !args.is_empty() {
+            return Err(IcooError::runtime(
+                format!(
+                    "class '{}' expected 0 arguments but got {}",
+                    class.name,
+                    args.len()
+                ),
+                Some(span),
+            ));
+        }
+
+        let missing: Vec<String> = instance
+            .borrow()
+            .fields
+            .iter()
+            .filter(|(_, field)| !field.initialized)
+            .map(|(name, _)| name.clone())
+            .collect();
+        if !missing.is_empty() {
+            return Err(IcooError::runtime(
+                format!(
+                    "class '{}' did not initialize required fields: {}",
+                    class.name,
+                    missing.join(", ")
+                ),
+                Some(span),
+            ));
+        }
+        Ok(receiver)
+    }
+
+    fn call_native_function(
+        &mut self,
+        function: &NativeFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        let valid_arity = if function.name == "EventLoop" {
+            args.len() <= 1
+        } else {
+            args.len() == function.arity
+        };
+        if !valid_arity {
+            return Err(IcooError::runtime(
+                format!(
+                    "expected {} arguments but got {}",
+                    function.arity,
+                    args.len()
+                ),
+                Some(span),
+            ));
+        }
+        match function.name.as_str() {
+            "print" => {
+                (self.output)(args[0].display());
+                Ok(Value::Nil)
+            }
+            "len" => self.call_native_method(
+                &NativeMethod {
+                    name: "len".to_string(),
+                    receiver: args[0].clone(),
+                },
+                Vec::new(),
+                span,
+            ),
+            "str" => Ok(Value::String(args[0].display())),
+            "type" => Ok(Value::String(args[0].type_name())),
+            "EventLoop" => {
+                let workers = if args.is_empty() {
+                    std::thread::available_parallelism()
+                        .map(|count| count.get())
+                        .unwrap_or(1)
+                } else {
+                    let workers = expect_int(&args[0], span)?;
+                    if workers <= 0 {
+                        return Err(IcooError::runtime(
+                            "EventLoop() worker count must be positive",
+                            Some(span),
+                        ));
+                    }
+                    workers as usize
+                };
+                let event_loop = IcooEventLoop::new_tokio(workers)
+                    .map_err(|message| IcooError::runtime(message, Some(span)))?;
+                Ok(Value::EventLoop(Rc::new(RefCell::new(event_loop))))
+            }
+            "current_loop" => self
+                .current_loop
+                .as_ref()
+                .cloned()
+                .map(Value::EventLoop)
+                .ok_or_else(|| {
+                    IcooError::runtime(
+                        "current_loop() can only be used inside a running task",
+                        Some(span),
+                    )
+                }),
+            "sleep" => {
+                let millis = expect_int(&args[0], span)?;
+                if millis < 0 {
+                    return Err(IcooError::runtime(
+                        "sleep() expects non-negative milliseconds",
+                        Some(span),
+                    ));
+                }
+                let Some(loop_ref) = self.current_loop.clone() else {
+                    return Err(IcooError::runtime(
+                        "sleep() can only be used inside a running task",
+                        Some(span),
+                    ));
+                };
+                Ok(Value::Task(schedule_sleep_task(loop_ref, millis as u64)))
+            }
+            "int" => match &args[0] {
+                Value::Int(value) => Ok(Value::Int(*value)),
+                Value::Float(value) => Ok(Value::Int(*value as i64)),
+                Value::Bool(value) => Ok(Value::Int(i64::from(*value))),
+                Value::String(value) => value.parse::<i64>().map(Value::Int).map_err(|_| {
+                    IcooError::runtime(format!("cannot convert '{}' to Int", value), Some(span))
+                }),
+                _ => Err(IcooError::runtime(
+                    "value cannot be converted to Int",
+                    Some(span),
+                )),
+            },
+            "float" => match &args[0] {
+                Value::Float(value) => Ok(Value::Float(*value)),
+                Value::Int(value) => Ok(Value::Float(*value as f64)),
+                Value::String(value) => value.parse::<f64>().map(Value::Float).map_err(|_| {
+                    IcooError::runtime(format!("cannot convert '{}' to Float", value), Some(span))
+                }),
+                _ => Err(IcooError::runtime(
+                    "value cannot be converted to Float",
+                    Some(span),
+                )),
+            },
+            _ => Err(IcooError::runtime("unknown native function", Some(span))),
+        }
+    }
+
+    fn has_native_method(&self, receiver: &Value, name: &str) -> bool {
+        if matches!(name, "to_string" | "type_name") {
+            return true;
+        }
+        match receiver {
+            Value::String(_) => matches!(name, "len" | "is_empty" | "contains"),
+            Value::Array(_) => matches!(
+                name,
+                "len"
+                    | "is_empty"
+                    | "push"
+                    | "pop"
+                    | "shift"
+                    | "unshift"
+                    | "at"
+                    | "includes"
+                    | "index_of"
+                    | "slice"
+                    | "splice"
+                    | "join"
+                    | "reverse"
+                    | "for_each"
+                    | "map"
+                    | "filter"
+                    | "reduce"
+                    | "find"
+                    | "find_index"
+                    | "some"
+                    | "every"
+            ),
+            Value::Map(_) => matches!(
+                name,
+                "len"
+                    | "is_empty"
+                    | "size"
+                    | "has"
+                    | "get"
+                    | "set"
+                    | "delete"
+                    | "clear"
+                    | "keys"
+                    | "values"
+                    | "entries"
+                    | "for_each"
+            ),
+            Value::EventLoop(_) => matches!(
+                name,
+                "spawn"
+                    | "run"
+                    | "run_until"
+                    | "stop"
+                    | "is_stopped"
+                    | "backend_name"
+                    | "worker_threads"
+            ),
+            Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
+            Value::Bool(_) => matches!(name, "to_int"),
+            Value::Int(_) => matches!(name, "to_float" | "abs"),
+            Value::Float(_) => matches!(name, "to_int" | "abs"),
+            Value::Instance(_)
+            | Value::Nil
+            | Value::Function(_)
+            | Value::Coroutine(_)
+            | Value::Class(_) => true,
+            Value::NativeFunction(_) | Value::NativeMethod(_) => true,
+        }
+    }
+
+    fn call_native_method(
+        &mut self,
+        method: &NativeMethod,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match method.name.as_str() {
+            "to_string" => return Ok(Value::String(method.receiver.display())),
+            "type_name" => return Ok(Value::String(method.receiver.type_name())),
+            _ => {}
+        }
+
+        match &method.receiver {
+            Value::String(value) => self.string_method(value, &method.name, args, span),
+            Value::Array(values) => self.array_method(values.clone(), &method.name, args, span),
+            Value::Map(values) => self.map_method(values.clone(), &method.name, args, span),
+            Value::EventLoop(loop_ref) => {
+                self.event_loop_method(loop_ref.clone(), &method.name, args, span)
+            }
+            Value::Task(task) => self.task_method(task.clone(), &method.name, args, span),
+            Value::Bool(value) if method.name == "to_int" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(i64::from(*value)))
+            }
+            Value::Int(value) if method.name == "to_float" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Float(*value as f64))
+            }
+            Value::Int(value) if method.name == "abs" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(value.abs()))
+            }
+            Value::Float(value) if method.name == "to_int" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(*value as i64))
+            }
+            Value::Float(value) if method.name == "abs" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Float(value.abs()))
+            }
+            _ => Err(IcooError::runtime(
+                format!(
+                    "type '{}' has no native method '{}'",
+                    method.receiver.type_name(),
+                    method.name
+                ),
+                Some(span),
+            )),
+        }
+    }
+
+    fn event_loop_method(
+        &mut self,
+        loop_ref: Rc<RefCell<IcooEventLoop>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "spawn" => {
+                expect_arity(&args, 1, span)?;
+                let Value::Coroutine(coroutine) = &args[0] else {
+                    return Err(IcooError::runtime(
+                        "spawn() expects a Coroutine",
+                        Some(span),
+                    ));
+                };
+                if coroutine.borrow().owner_task.is_some() {
+                    return Err(IcooError::runtime(
+                        "coroutine has already been spawned",
+                        Some(span),
+                    ));
+                }
+                let task = {
+                    let mut event_loop = loop_ref.borrow_mut();
+                    let id = event_loop.next_task_id;
+                    event_loop.next_task_id += 1;
+                    let task = Rc::new(RefCell::new(IcooTask {
+                        id,
+                        coroutine: coroutine.clone(),
+                        state: TaskState::Queued,
+                        result: None,
+                        error: None,
+                        awaiters: Vec::new(),
+                    }));
+                    coroutine.borrow_mut().owner_task = Some(id);
+                    event_loop.ready.push_back(task.clone());
+                    task
+                };
+                Ok(Value::Task(task))
+            }
+            "run" => {
+                expect_arity(&args, 0, span)?;
+                self.run_event_loop(loop_ref, span)?;
+                Ok(Value::Nil)
+            }
+            "run_until" => {
+                expect_arity(&args, 1, span)?;
+                let Value::Task(task) = &args[0] else {
+                    return Err(IcooError::runtime("run_until() expects a Task", Some(span)));
+                };
+                self.run_event_loop(loop_ref, span)?;
+                task_result(task.clone(), span)
+            }
+            "stop" => {
+                expect_arity(&args, 0, span)?;
+                loop_ref.borrow_mut().stopped = true;
+                Ok(Value::Nil)
+            }
+            "is_stopped" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(loop_ref.borrow().stopped))
+            }
+            "backend_name" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::String(loop_ref.borrow().backend.name().to_string()))
+            }
+            "worker_threads" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(loop_ref.borrow().backend.worker_threads() as i64))
+            }
+            _ => Err(IcooError::runtime("unknown EventLoop method", Some(span))),
+        }
+    }
+
+    fn task_method(
+        &mut self,
+        task: Rc<RefCell<IcooTask>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "is_done" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(matches!(
+                    task.borrow().state,
+                    TaskState::Done | TaskState::Failed | TaskState::Cancelled
+                )))
+            }
+            "is_failed" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(task.borrow().state == TaskState::Failed))
+            }
+            "result" => {
+                expect_arity(&args, 0, span)?;
+                task_result(task, span)
+            }
+            "cancel" => {
+                expect_arity(&args, 0, span)?;
+                let mut task_ref = task.borrow_mut();
+                if !matches!(
+                    task_ref.state,
+                    TaskState::Done | TaskState::Failed | TaskState::Cancelled
+                ) {
+                    task_ref.state = TaskState::Cancelled;
+                }
+                Ok(Value::Nil)
+            }
+            _ => Err(IcooError::runtime("unknown Task method", Some(span))),
+        }
+    }
+
+    fn run_event_loop(
+        &mut self,
+        loop_ref: Rc<RefCell<IcooEventLoop>>,
+        span: Span,
+    ) -> IcooResult<()> {
+        loop {
+            if loop_ref.borrow().stopped {
+                break;
+            }
+            enqueue_due_timers(&loop_ref);
+            let Some(task) = loop_ref.borrow_mut().ready.pop_front() else {
+                if wait_for_next_timer(&loop_ref) {
+                    continue;
+                } else {
+                    break;
+                }
+            };
+            self.run_task(loop_ref.clone(), task, span)?;
+        }
+        Ok(())
+    }
+
+    fn run_task(
+        &mut self,
+        loop_ref: Rc<RefCell<IcooEventLoop>>,
+        task: Rc<RefCell<IcooTask>>,
+        span: Span,
+    ) -> IcooResult<()> {
+        if matches!(
+            task.borrow().state,
+            TaskState::Done | TaskState::Failed | TaskState::Cancelled
+        ) {
+            return Ok(());
+        }
+        task.borrow_mut().state = TaskState::Running;
+
+        let previous_loop = self.current_loop.replace(loop_ref.clone());
+        let previous_task = self.current_task.replace(task.clone());
+        let result = self.run_coroutine_until_pause(task.borrow().coroutine.clone());
+        self.current_loop = previous_loop;
+        self.current_task = previous_task;
+
+        match result {
+            Ok(CoroutineStep::Yielded) => {
+                task.borrow_mut().state = TaskState::Queued;
+                loop_ref.borrow_mut().ready.push_back(task);
+            }
+            Ok(CoroutineStep::Done(value)) => {
+                complete_task(task, TaskState::Done, Some(value), None, &loop_ref);
+            }
+            Err(IcooError::Await(Value::Task(waiting_on))) => {
+                task.borrow_mut().state = TaskState::Waiting;
+                waiting_on.borrow_mut().awaiters.push(task);
+            }
+            Err(err) => {
+                complete_task(
+                    task,
+                    TaskState::Failed,
+                    None,
+                    Some(err.to_string()),
+                    &loop_ref,
+                );
+            }
+        }
+        let _ = span;
+        Ok(())
+    }
+
+    fn run_coroutine_until_pause(
+        &mut self,
+        coroutine: Rc<RefCell<IcooCoroutine>>,
+    ) -> IcooResult<CoroutineStep> {
+        let previous_env = self.env.clone();
+        self.env = coroutine.borrow().env.clone();
+        let result = loop {
+            let instr = {
+                let coroutine_ref = coroutine.borrow();
+                if coroutine_ref.pc >= coroutine_ref.instructions.len() {
+                    if let Some(return_type) = &coroutine_ref.return_type {
+                        check_value_type(
+                            &Value::Nil,
+                            return_type,
+                            &format!("return value of '{}'", coroutine_ref.name),
+                            return_type.span,
+                        )?;
+                    }
+                    break Ok(CoroutineStep::Done(Value::Nil));
+                }
+                coroutine_ref.instructions[coroutine_ref.pc].clone()
+            };
+
+            match instr {
+                CoroutineInstr::Stmt(stmt) => match self.execute(&stmt) {
+                    Ok(()) => coroutine.borrow_mut().pc += 1,
+                    Err(IcooError::Return(value)) => {
+                        if let Some(return_type) = &coroutine.borrow().return_type {
+                            let span = match &stmt {
+                                Stmt::Return { span, .. } => *span,
+                                _ => return_type.span,
+                            };
+                            check_value_type(
+                                &value,
+                                return_type,
+                                &format!("return value of '{}'", coroutine.borrow().name),
+                                span,
+                            )?;
+                        }
+                        break Ok(CoroutineStep::Done(value));
+                    }
+                    Err(err) => break Err(err),
+                },
+                CoroutineInstr::JumpIfFalse { condition, target } => {
+                    if self.eval(&condition)?.truthy() {
+                        coroutine.borrow_mut().pc += 1;
+                    } else {
+                        coroutine.borrow_mut().pc = target;
+                    }
+                }
+                CoroutineInstr::Jump { target } => {
+                    coroutine.borrow_mut().pc = target;
+                }
+                CoroutineInstr::Yield(value) => {
+                    let value = if let Some(value) = value {
+                        self.eval(&value)?
+                    } else {
+                        Value::Nil
+                    };
+                    coroutine.borrow_mut().pc += 1;
+                    let _ = value;
+                    break Ok(CoroutineStep::Yielded);
+                }
+            }
+        };
+        self.env = previous_env;
+        result
+    }
+
+    fn string_method(
+        &self,
+        value: &str,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "len" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(value.chars().count() as i64))
+            }
+            "is_empty" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(value.is_empty()))
+            }
+            "contains" => {
+                expect_arity(&args, 1, span)?;
+                let needle = expect_string(&args[0], span)?;
+                Ok(Value::Bool(value.contains(&needle)))
+            }
+            _ => Err(IcooError::runtime("unknown String method", Some(span))),
+        }
+    }
+
+    fn array_method(
+        &mut self,
+        values: Rc<RefCell<Vec<Value>>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "len" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(values.borrow().len() as i64))
+            }
+            "is_empty" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(values.borrow().is_empty()))
+            }
+            "push" => {
+                expect_arity(&args, 1, span)?;
+                values.borrow_mut().push(args[0].clone());
+                Ok(Value::Nil)
+            }
+            "pop" => {
+                expect_arity(&args, 0, span)?;
+                Ok(values.borrow_mut().pop().unwrap_or(Value::Nil))
+            }
+            "shift" => {
+                expect_arity(&args, 0, span)?;
+                let mut values = values.borrow_mut();
+                if values.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(values.remove(0))
+                }
+            }
+            "unshift" => {
+                expect_arity(&args, 1, span)?;
+                let mut values_ref = values.borrow_mut();
+                values_ref.insert(0, args[0].clone());
+                Ok(Value::Int(values_ref.len() as i64))
+            }
+            "at" => {
+                expect_arity(&args, 1, span)?;
+                let index = normalize_index(expect_int(&args[0], span)?, values.borrow().len());
+                Ok(index
+                    .and_then(|index| values.borrow().get(index).cloned())
+                    .unwrap_or(Value::Nil))
+            }
+            "includes" => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Bool(
+                    values
+                        .borrow()
+                        .iter()
+                        .any(|value| value_equal(value, &args[0])),
+                ))
+            }
+            "index_of" => {
+                expect_arity(&args, 1, span)?;
+                let index = values
+                    .borrow()
+                    .iter()
+                    .position(|value| value_equal(value, &args[0]))
+                    .map(|index| index as i64)
+                    .unwrap_or(-1);
+                Ok(Value::Int(index))
+            }
+            "slice" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(arity_error("slice", "1 or 2", args.len(), span));
+                }
+                let values_ref = values.borrow();
+                let len = values_ref.len() as i64;
+                let start = clamp_slice_index(expect_int(&args[0], span)?, len);
+                let end = if args.len() == 2 {
+                    clamp_slice_index(expect_int(&args[1], span)?, len)
+                } else {
+                    len
+                };
+                let result = if end < start {
+                    Vec::new()
+                } else {
+                    values_ref[start as usize..end as usize].to_vec()
+                };
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            "splice" => {
+                if args.len() < 2 {
+                    return Err(arity_error("splice", "at least 2", args.len(), span));
+                }
+                let mut values_ref = values.borrow_mut();
+                let len = values_ref.len() as i64;
+                let start = clamp_slice_index(expect_int(&args[0], span)?, len) as usize;
+                let delete_count = expect_int(&args[1], span)?.max(0) as usize;
+                let delete_count = delete_count.min(values_ref.len().saturating_sub(start));
+                let removed: Vec<Value> = values_ref
+                    .splice(start..start + delete_count, args.iter().skip(2).cloned())
+                    .collect();
+                Ok(Value::Array(Rc::new(RefCell::new(removed))))
+            }
+            "join" => {
+                if args.len() > 1 {
+                    return Err(arity_error("join", "0 or 1", args.len(), span));
+                }
+                let separator = if args.is_empty() {
+                    ",".to_string()
+                } else {
+                    expect_string(&args[0], span)?
+                };
+                let parts: Vec<String> = values.borrow().iter().map(Value::display).collect();
+                Ok(Value::String(parts.join(&separator)))
+            }
+            "reverse" => {
+                expect_arity(&args, 0, span)?;
+                values.borrow_mut().reverse();
+                Ok(Value::Array(values))
+            }
+            "for_each" => {
+                expect_arity(&args, 1, span)?;
+                let snapshot = values.borrow().clone();
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    self.call_value(args[0].clone(), vec![value, Value::Int(index as i64)], span)?;
+                }
+                Ok(Value::Nil)
+            }
+            "map" => {
+                expect_arity(&args, 1, span)?;
+                let snapshot = values.borrow().clone();
+                let mut result = Vec::new();
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    result.push(self.call_value(
+                        args[0].clone(),
+                        vec![value, Value::Int(index as i64)],
+                        span,
+                    )?);
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            "filter" => {
+                expect_arity(&args, 1, span)?;
+                let snapshot = values.borrow().clone();
+                let mut result = Vec::new();
+                for (index, value) in snapshot.into_iter().enumerate() {
+                    if self
+                        .call_value(
+                            args[0].clone(),
+                            vec![value.clone(), Value::Int(index as i64)],
+                            span,
+                        )?
+                        .truthy()
+                    {
+                        result.push(value);
+                    }
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            "reduce" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(arity_error("reduce", "1 or 2", args.len(), span));
+                }
+                let snapshot = values.borrow().clone();
+                let mut iter = snapshot.into_iter().enumerate();
+                let mut acc = if args.len() == 2 {
+                    args[1].clone()
+                } else if let Some((_, first)) = iter.next() {
+                    first
+                } else {
+                    return Ok(Value::Nil);
+                };
+                for (index, value) in iter {
+                    acc = self.call_value(
+                        args[0].clone(),
+                        vec![acc, value, Value::Int(index as i64)],
+                        span,
+                    )?;
+                }
+                Ok(acc)
+            }
+            "find" => {
+                expect_arity(&args, 1, span)?;
+                for (index, value) in values.borrow().clone().into_iter().enumerate() {
+                    if self
+                        .call_value(
+                            args[0].clone(),
+                            vec![value.clone(), Value::Int(index as i64)],
+                            span,
+                        )?
+                        .truthy()
+                    {
+                        return Ok(value);
+                    }
+                }
+                Ok(Value::Nil)
+            }
+            "find_index" => {
+                expect_arity(&args, 1, span)?;
+                for (index, value) in values.borrow().clone().into_iter().enumerate() {
+                    if self
+                        .call_value(args[0].clone(), vec![value, Value::Int(index as i64)], span)?
+                        .truthy()
+                    {
+                        return Ok(Value::Int(index as i64));
+                    }
+                }
+                Ok(Value::Int(-1))
+            }
+            "some" => {
+                expect_arity(&args, 1, span)?;
+                for (index, value) in values.borrow().clone().into_iter().enumerate() {
+                    if self
+                        .call_value(args[0].clone(), vec![value, Value::Int(index as i64)], span)?
+                        .truthy()
+                    {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            "every" => {
+                expect_arity(&args, 1, span)?;
+                for (index, value) in values.borrow().clone().into_iter().enumerate() {
+                    if !self
+                        .call_value(args[0].clone(), vec![value, Value::Int(index as i64)], span)?
+                        .truthy()
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            _ => Err(IcooError::runtime("unknown Array method", Some(span))),
+        }
+    }
+
+    fn map_method(
+        &mut self,
+        values: Rc<RefCell<HashMap<String, Value>>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "len" | "size" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(values.borrow().len() as i64))
+            }
+            "is_empty" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(values.borrow().is_empty()))
+            }
+            "has" => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Bool(
+                    values
+                        .borrow()
+                        .contains_key(&expect_string(&args[0], span)?),
+                ))
+            }
+            "get" => {
+                expect_arity(&args, 1, span)?;
+                Ok(values
+                    .borrow()
+                    .get(&expect_string(&args[0], span)?)
+                    .cloned()
+                    .unwrap_or(Value::Nil))
+            }
+            "set" => {
+                expect_arity(&args, 2, span)?;
+                values
+                    .borrow_mut()
+                    .insert(expect_string(&args[0], span)?, args[1].clone());
+                Ok(Value::Map(values))
+            }
+            "delete" => {
+                expect_arity(&args, 1, span)?;
+                Ok(Value::Bool(
+                    values
+                        .borrow_mut()
+                        .remove(&expect_string(&args[0], span)?)
+                        .is_some(),
+                ))
+            }
+            "clear" => {
+                expect_arity(&args, 0, span)?;
+                values.borrow_mut().clear();
+                Ok(Value::Nil)
+            }
+            "keys" => {
+                expect_arity(&args, 0, span)?;
+                let result = values.borrow().keys().cloned().map(Value::String).collect();
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            "values" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Array(Rc::new(RefCell::new(
+                    values.borrow().values().cloned().collect(),
+                ))))
+            }
+            "entries" => {
+                expect_arity(&args, 0, span)?;
+                let result = values
+                    .borrow()
+                    .iter()
+                    .map(|(key, value)| {
+                        Value::Array(Rc::new(RefCell::new(vec![
+                            Value::String(key.clone()),
+                            value.clone(),
+                        ])))
+                    })
+                    .collect();
+                Ok(Value::Array(Rc::new(RefCell::new(result))))
+            }
+            "for_each" => {
+                expect_arity(&args, 1, span)?;
+                let snapshot: Vec<(String, Value)> = values
+                    .borrow()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                for (key, value) in snapshot {
+                    self.call_value(args[0].clone(), vec![value, Value::String(key)], span)?;
+                }
+                Ok(Value::Nil)
+            }
+            _ => Err(IcooError::runtime("unknown Map method", Some(span))),
+        }
+    }
+}
+
+enum CoroutineStep {
+    Yielded,
+    Done(Value),
+}
+
+fn task_result(task: Rc<RefCell<IcooTask>>, span: Span) -> IcooResult<Value> {
+    match task.borrow().state {
+        TaskState::Done => Ok(task.borrow().result.clone().unwrap_or(Value::Nil)),
+        TaskState::Failed => Err(IcooError::runtime(
+            task.borrow()
+                .error
+                .clone()
+                .unwrap_or_else(|| "task failed".to_string()),
+            Some(span),
+        )),
+        TaskState::Cancelled => Err(IcooError::runtime("task was cancelled", Some(span))),
+        _ => Err(IcooError::runtime("task is not done", Some(span))),
+    }
+}
+
+fn schedule_sleep_task(loop_ref: Rc<RefCell<IcooEventLoop>>, millis: u64) -> Rc<RefCell<IcooTask>> {
+    let env = Environment::new();
+    let coroutine = Rc::new(RefCell::new(IcooCoroutine {
+        name: "sleep".to_string(),
+        return_type: None,
+        env,
+        instructions: Vec::new(),
+        pc: 0,
+        owner_task: None,
+    }));
+    let mut event_loop = loop_ref.borrow_mut();
+    let id = event_loop.next_task_id;
+    event_loop.next_task_id += 1;
+    coroutine.borrow_mut().owner_task = Some(id);
+    let task = Rc::new(RefCell::new(IcooTask {
+        id,
+        coroutine,
+        state: TaskState::Queued,
+        result: None,
+        error: None,
+        awaiters: Vec::new(),
+    }));
+    event_loop.timers.push(SleepTimer {
+        due: Instant::now() + Duration::from_millis(millis),
+        task: task.clone(),
+    });
+    task
+}
+
+fn enqueue_due_timers(loop_ref: &Rc<RefCell<IcooEventLoop>>) {
+    let now = Instant::now();
+    let mut ready_timers = Vec::new();
+    {
+        let mut event_loop = loop_ref.borrow_mut();
+        let mut index = 0;
+        while index < event_loop.timers.len() {
+            if event_loop.timers[index].due <= now {
+                ready_timers.push(event_loop.timers.swap_remove(index));
+            } else {
+                index += 1;
+            }
+        }
+    }
+    if !ready_timers.is_empty() {
+        let mut event_loop = loop_ref.borrow_mut();
+        for timer in ready_timers {
+            event_loop.ready.push_back(timer.task);
+        }
+    }
+}
+
+fn wait_for_next_timer(loop_ref: &Rc<RefCell<IcooEventLoop>>) -> bool {
+    let Some((due, backend)) = ({
+        let event_loop = loop_ref.borrow();
+        event_loop
+            .timers
+            .iter()
+            .map(|timer| timer.due)
+            .min()
+            .map(|due| (due, event_loop.backend.clone()))
+    }) else {
+        return false;
+    };
+    let now = Instant::now();
+    if due > now {
+        backend.sleep_blocking(due.duration_since(now));
+    }
+    enqueue_due_timers(loop_ref);
+    true
+}
+
+fn complete_task(
+    task: Rc<RefCell<IcooTask>>,
+    state: TaskState,
+    result: Option<Value>,
+    error: Option<String>,
+    loop_ref: &Rc<RefCell<IcooEventLoop>>,
+) {
+    let awaiters = {
+        let mut task_ref = task.borrow_mut();
+        task_ref.state = state;
+        task_ref.result = result;
+        task_ref.error = error;
+        std::mem::take(&mut task_ref.awaiters)
+    };
+    let mut event_loop = loop_ref.borrow_mut();
+    for awaiter in awaiters {
+        if awaiter.borrow().state == TaskState::Waiting {
+            awaiter.borrow_mut().state = TaskState::Queued;
+            event_loop.ready.push_back(awaiter);
+        }
+    }
+}
+
+fn compile_coroutine_body(statements: &[Stmt]) -> Vec<CoroutineInstr> {
+    let mut instructions = Vec::new();
+    let mut loop_stack = Vec::new();
+    compile_statements(statements, &mut instructions, &mut loop_stack);
+    instructions
+}
+
+struct LoopTargets {
+    continue_target: usize,
+    break_jumps: Vec<usize>,
+}
+
+fn compile_statements(
+    statements: &[Stmt],
+    instructions: &mut Vec<CoroutineInstr>,
+    loop_stack: &mut Vec<LoopTargets>,
+) {
+    for stmt in statements {
+        compile_statement(stmt, instructions, loop_stack);
+    }
+}
+
+fn compile_statement(
+    stmt: &Stmt,
+    instructions: &mut Vec<CoroutineInstr>,
+    loop_stack: &mut Vec<LoopTargets>,
+) {
+    match stmt {
+        Stmt::Yield { value, .. } => instructions.push(CoroutineInstr::Yield(value.clone())),
+        Stmt::While { condition, body } => {
+            let start = instructions.len();
+            let jump_if_false = instructions.len();
+            instructions.push(CoroutineInstr::JumpIfFalse {
+                condition: condition.clone(),
+                target: usize::MAX,
+            });
+            loop_stack.push(LoopTargets {
+                continue_target: start,
+                break_jumps: Vec::new(),
+            });
+            compile_statements(body, instructions, loop_stack);
+            let loop_targets = loop_stack.pop().expect("loop target stack underflow");
+            instructions.push(CoroutineInstr::Jump { target: start });
+            let end = instructions.len();
+            patch_jump_target(instructions, jump_if_false, end);
+            for break_jump in loop_targets.break_jumps {
+                patch_jump_target(instructions, break_jump, end);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            elifs,
+            else_branch,
+        } => {
+            let mut end_jumps = Vec::new();
+            let first_false_jump = instructions.len();
+            instructions.push(CoroutineInstr::JumpIfFalse {
+                condition: condition.clone(),
+                target: usize::MAX,
+            });
+            compile_statements(then_branch, instructions, loop_stack);
+            end_jumps.push(push_jump_placeholder(instructions));
+            let mut previous_false_jump = first_false_jump;
+
+            for (condition, body) in elifs {
+                let elif_start = instructions.len();
+                patch_jump_target(instructions, previous_false_jump, elif_start);
+                previous_false_jump = instructions.len();
+                instructions.push(CoroutineInstr::JumpIfFalse {
+                    condition: condition.clone(),
+                    target: usize::MAX,
+                });
+                compile_statements(body, instructions, loop_stack);
+                end_jumps.push(push_jump_placeholder(instructions));
+            }
+
+            let else_start = instructions.len();
+            patch_jump_target(instructions, previous_false_jump, else_start);
+            if let Some(else_branch) = else_branch {
+                compile_statements(else_branch, instructions, loop_stack);
+            }
+            let end = instructions.len();
+            for jump in end_jumps {
+                patch_jump_target(instructions, jump, end);
+            }
+        }
+        Stmt::Break(_) => {
+            if let Some(targets) = loop_stack.last_mut() {
+                let jump = push_jump_placeholder(instructions);
+                targets.break_jumps.push(jump);
+            } else {
+                instructions.push(CoroutineInstr::Stmt(stmt.clone()));
+            }
+        }
+        Stmt::Continue(_) => {
+            if let Some(targets) = loop_stack.last() {
+                instructions.push(CoroutineInstr::Jump {
+                    target: targets.continue_target,
+                });
+            } else {
+                instructions.push(CoroutineInstr::Stmt(stmt.clone()));
+            }
+        }
+        _ => instructions.push(CoroutineInstr::Stmt(stmt.clone())),
+    }
+}
+
+fn push_jump_placeholder(instructions: &mut Vec<CoroutineInstr>) -> usize {
+    let index = instructions.len();
+    instructions.push(CoroutineInstr::Jump { target: usize::MAX });
+    index
+}
+
+fn patch_jump_target(instructions: &mut [CoroutineInstr], index: usize, target: usize) {
+    match &mut instructions[index] {
+        CoroutineInstr::JumpIfFalse { target: slot, .. }
+        | CoroutineInstr::Jump { target: slot } => {
+            *slot = target;
+        }
+        _ => {}
+    }
+}
+
+fn check_value_type(
+    value: &Value,
+    type_hint: &TypeRef,
+    context: &str,
+    span: Span,
+) -> IcooResult<()> {
+    if value_matches_type(value, &type_hint.name) {
+        Ok(())
+    } else {
+        Err(IcooError::runtime(
+            format!(
+                "expected {} for {} but got {}",
+                type_hint.name,
+                context,
+                value.type_name()
+            ),
+            Some(span),
+        ))
+    }
+}
+
+fn value_matches_type(value: &Value, type_name: &str) -> bool {
+    match type_name {
+        "Any" => true,
+        "Nil" => matches!(value, Value::Nil),
+        "Bool" => matches!(value, Value::Bool(_)),
+        "Int" => matches!(value, Value::Int(_)),
+        "Float" => matches!(value, Value::Float(_)),
+        "String" => matches!(value, Value::String(_)),
+        "Array" => matches!(value, Value::Array(_)),
+        "Map" => matches!(value, Value::Map(_)),
+        "Function" => matches!(
+            value,
+            Value::Function(_) | Value::NativeFunction(_) | Value::NativeMethod(_)
+        ),
+        "Coroutine" => matches!(value, Value::Coroutine(_)),
+        "Task" => matches!(value, Value::Task(_)),
+        "EventLoop" => matches!(value, Value::EventLoop(_)),
+        class_name => matches_instance_type(value, class_name),
+    }
+}
+
+fn matches_instance_type(value: &Value, class_name: &str) -> bool {
+    let Value::Instance(instance) = value else {
+        return false;
+    };
+    let mut class = Some(instance.borrow().class.clone());
+    while let Some(current) = class {
+        if current.name == class_name {
+            return true;
+        }
+        class = current.superclass.clone();
+    }
+    false
+}
+
+fn numeric(
+    left: Value,
+    right: Value,
+    span: Span,
+    int_op: impl Fn(i64, i64) -> i64,
+    float_op: impl Fn(f64, f64) -> f64,
+) -> IcooResult<Value> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(int_op(a, b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(a, b))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(a as f64, b))),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(a, b as f64))),
+        _ => Err(IcooError::runtime("operands must be numbers", Some(span))),
+    }
+}
+
+fn numeric_float(
+    left: Value,
+    right: Value,
+    span: Span,
+    float_op: impl Fn(f64, f64) -> f64,
+) -> IcooResult<Value> {
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Float(float_op(a as f64, b as f64))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(a, b))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(a as f64, b))),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(a, b as f64))),
+        _ => Err(IcooError::runtime("operands must be numbers", Some(span))),
+    }
+}
+
+fn compare(
+    left: Value,
+    right: Value,
+    span: Span,
+    op: impl Fn(f64, f64) -> bool,
+) -> IcooResult<Value> {
+    let left = number_as_f64(left, span)?;
+    let right = number_as_f64(right, span)?;
+    Ok(Value::Bool(op(left, right)))
+}
+
+fn number_as_f64(value: Value, span: Span) -> IcooResult<f64> {
+    match value {
+        Value::Int(value) => Ok(value as f64),
+        Value::Float(value) => Ok(value),
+        _ => Err(IcooError::runtime("operand must be a number", Some(span))),
+    }
+}
+
+fn value_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Nil, Value::Nil) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
+        (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Array(a), Value::Array(b)) => Rc::ptr_eq(a, b),
+        (Value::Map(a), Value::Map(b)) => Rc::ptr_eq(a, b),
+        (Value::Coroutine(a), Value::Coroutine(b)) => Rc::ptr_eq(a, b),
+        (Value::Task(a), Value::Task(b)) => Rc::ptr_eq(a, b),
+        (Value::EventLoop(a), Value::EventLoop(b)) => Rc::ptr_eq(a, b),
+        (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
+        (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(a, b),
+        _ => false,
+    }
+}
+
+fn expect_arity(args: &[Value], expected: usize, span: Span) -> IcooResult<()> {
+    if args.len() == expected {
+        Ok(())
+    } else {
+        Err(IcooError::runtime(
+            format!("expected {} arguments but got {}", expected, args.len()),
+            Some(span),
+        ))
+    }
+}
+
+fn arity_error(name: &str, expected: &str, got: usize, span: Span) -> IcooError {
+    IcooError::runtime(
+        format!(
+            "method '{}' expected {} arguments but got {}",
+            name, expected, got
+        ),
+        Some(span),
+    )
+}
+
+fn expect_string(value: &Value, span: Span) -> IcooResult<String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        _ => Err(IcooError::runtime("expected String argument", Some(span))),
+    }
+}
+
+fn expect_int(value: &Value, span: Span) -> IcooResult<i64> {
+    match value {
+        Value::Int(value) => Ok(*value),
+        _ => Err(IcooError::runtime("expected Int argument", Some(span))),
+    }
+}
+
+fn normalize_index(index: i64, len: usize) -> Option<usize> {
+    let len = len as i64;
+    let index = if index < 0 { len + index } else { index };
+    if index < 0 || index >= len {
+        None
+    } else {
+        Some(index as usize)
+    }
+}
+
+fn clamp_slice_index(index: i64, len: i64) -> i64 {
+    let index = if index < 0 { len + index } else { index };
+    index.clamp(0, len)
+}
