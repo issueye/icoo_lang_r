@@ -845,6 +845,7 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("sleep", "Function"),
         ("math", "Math"),
         ("time", "Time"),
+        ("json", "Json"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -902,6 +903,8 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Math", "random") => Some(TypeInfo::known("Float")),
         ("Math", "abs" | "min" | "max") => Some(TypeInfo::Unknown),
         ("Time", "now_ms" | "now_sec") => Some(TypeInfo::known("Int")),
+        ("Json", "stringify") => Some(TypeInfo::known("String")),
+        ("Json", "parse") => Some(TypeInfo::Unknown),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1008,6 +1011,18 @@ fn native_method_sig(
         ("Math", "min" | "max") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("Number"), Some("Number")],
+            None,
+            return_type,
+        )),
+        ("Json", "stringify") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Any")],
+            None,
+            return_type,
+        )),
+        ("Json", "parse") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
             None,
             return_type,
         )),

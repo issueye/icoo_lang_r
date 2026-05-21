@@ -481,3 +481,29 @@ print(time.now_ms(1))
     .unwrap_err();
     assert!(err.contains("type error: method expected 0 arguments but got 1"));
 }
+
+#[test]
+fn supports_json_builtin_module() {
+    let output = run(r#"
+let text = json.stringify([1, "x", true, nil])
+print(text)
+let data = json.parse("{\"name\":\"Icoo\",\"items\":[1,2],\"active\":true}")
+print(data.get("name"))
+print(data.get("items").at(1).to_string())
+print(data.get("active").to_string())
+"#)
+    .unwrap();
+    assert_eq!(output, vec![r#"[1,"x",true,null]"#, "Icoo", "2", "true"]);
+
+    let err = run(r#"
+json.parse(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+json.parse("{bad}")
+"#)
+    .unwrap_err();
+    assert!(err.contains("runtime error: json.parse() failed"));
+}

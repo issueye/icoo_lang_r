@@ -1253,6 +1253,7 @@ sleep(ms: Int) -> Task
 ```text
 math
 time
+json
 ```
 
 `math` 模块：
@@ -1273,6 +1274,15 @@ math.random() -> Float
 time.now_ms() -> Int
 time.now_sec() -> Int
 ```
+
+`json` 模块：
+
+```text
+json.stringify(value: Any) -> String
+json.parse(text: String) -> Any
+```
+
+`json.stringify` 支持 `Nil`、`Bool`、`Int`、`Float`、`String`、`Array`、`Map`。函数、类、实例、协程、任务和事件循环等运行时对象不参与 JSON 序列化。
 
 事件循环对象方法：
 

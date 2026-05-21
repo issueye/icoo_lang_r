@@ -70,7 +70,7 @@ impl Interpreter {
                 BindingKind::Const,
             );
         }
-        for name in ["math", "time"] {
+        for name in ["math", "time", "json"] {
             self.env.borrow_mut().define(
                 name.to_string(),
                 Value::NativeModule(Rc::new(NativeModule {
@@ -965,6 +965,22 @@ impl Interpreter {
             ("time", "now_sec") => {
                 expect_arity(&args, 0, span)?;
                 Ok(Value::Int(now_duration(span)?.as_secs() as i64))
+            }
+            ("json", "stringify") => {
+                expect_arity(&args, 1, span)?;
+                serde_json::to_string(&value_to_json(&args[0], span)?)
+                    .map(Value::String)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("json.stringify() failed: {}", err), Some(span))
+                    })
+            }
+            ("json", "parse") => {
+                expect_arity(&args, 1, span)?;
+                let text = expect_string(&args[0], span)?;
+                let parsed = serde_json::from_str::<serde_json::Value>(&text).map_err(|err| {
+                    IcooError::runtime(format!("json.parse() failed: {}", err), Some(span))
+                })?;
+                json_to_value(parsed, span)
             }
             _ => Err(IcooError::runtime(
                 format!(
@@ -2066,7 +2082,72 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
             "abs" | "floor" | "ceil" | "round" | "min" | "max" | "random"
         ),
         "time" => matches!(name, "now_ms" | "now_sec"),
+        "json" => matches!(name, "stringify" | "parse"),
         _ => false,
+    }
+}
+
+fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {
+    match value {
+        Value::Nil => Ok(serde_json::Value::Null),
+        Value::Bool(value) => Ok(serde_json::Value::Bool(*value)),
+        Value::Int(value) => Ok(serde_json::Value::Number((*value).into())),
+        Value::Float(value) => serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                IcooError::runtime("Float value cannot be represented as JSON", Some(span))
+            }),
+        Value::String(value) => Ok(serde_json::Value::String(value.clone())),
+        Value::Array(values) => values
+            .borrow()
+            .iter()
+            .map(|value| value_to_json(value, span))
+            .collect::<IcooResult<Vec<_>>>()
+            .map(serde_json::Value::Array),
+        Value::Map(values) => {
+            let mut object = serde_json::Map::new();
+            let values_ref = values.borrow();
+            for (key, value) in values_ref.iter() {
+                object.insert(key.clone(), value_to_json(value, span)?);
+            }
+            Ok(serde_json::Value::Object(object))
+        }
+        _ => Err(IcooError::runtime(
+            format!("type '{}' cannot be represented as JSON", value.type_name()),
+            Some(span),
+        )),
+    }
+}
+
+fn json_to_value(value: serde_json::Value, span: Span) -> IcooResult<Value> {
+    match value {
+        serde_json::Value::Null => Ok(Value::Nil),
+        serde_json::Value::Bool(value) => Ok(Value::Bool(value)),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(Value::Int(value))
+            } else if let Some(value) = value.as_f64() {
+                Ok(Value::Float(value))
+            } else {
+                Err(IcooError::runtime(
+                    "JSON number cannot be represented as Int or Float",
+                    Some(span),
+                ))
+            }
+        }
+        serde_json::Value::String(value) => Ok(Value::String(value)),
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(|value| json_to_value(value, span))
+            .collect::<IcooResult<Vec<_>>>()
+            .map(|values| Value::Array(Rc::new(RefCell::new(values)))),
+        serde_json::Value::Object(values) => {
+            let mut result = HashMap::new();
+            for (key, value) in values {
+                result.insert(key, json_to_value(value, span)?);
+            }
+            Ok(Value::Map(Rc::new(RefCell::new(result))))
+        }
     }
 }
 
