@@ -1418,6 +1418,14 @@ fn home(req: Map<String, Any>, res: WebInoResponse):
 
 `listen` 会并发接收和读取最多 `max_requests` 个连接，适合验证多个客户端同时连接的服务行为。当前解释器中的 Icoo handler 仍在解释器线程内逐个执行，因为用户函数闭包和运行时环境还不是线程安全对象；后续可以在运行时对象可安全跨线程后扩展为真正的并发 handler、长生命周期服务、中间件、路径参数、路由组、错误处理和 async handler。
 
+`std.web.ino` 性能测试放在独立 ignored 测试中，避免常规 `cargo test` 因本地机器性能和端口调度产生波动。手动运行：
+
+```text
+cargo test --test web_ino_perf -- --ignored --nocapture
+```
+
+该测试会启动一个 `std.web.ino` 服务，并用多个本地 TCP 客户端同时请求，输出请求数、总耗时和吞吐量。
+
 事件循环对象方法：
 
 ```text
