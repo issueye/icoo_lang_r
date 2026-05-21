@@ -96,6 +96,16 @@ Instance
 Any
 ```
 
+类型标注支持泛型形式：
+
+```python
+let values: Array<Int> = [1, 2, 3]
+let scores: Map<String, Int> = {"Tom": 95}
+let task: Task<String> = loop.spawn(load_name())
+```
+
+第一版泛型主要用于静态检查。运行时仍保留动态值模型，集合元素类型由类型检查器基于字面量和函数签名做保守推断。
+
 字符串：
 
 ```python
@@ -1361,6 +1371,7 @@ task.cancel()
 
 - 基于类型标注的运行时检查。
 - 基于明显静态类型的提前检查。
+- `Array<T>`、`Map<K, V>`、`Task<T>`、`Coroutine<T>` 等泛型类型标注。
 - 函数参数检查。
 - 函数返回值检查。
 - 类属性赋值检查。

@@ -406,3 +406,46 @@ scores.set(1, 2)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
 }
+
+#[test]
+fn typechecker_supports_generic_type_annotations() {
+    let output = run(r#"
+let values: Array<Int> = [1, 2, 3]
+let scores: Map<String, Int> = {"Tom": 95}
+
+async fn name() -> String:
+    return "Icoo"
+
+let loop = EventLoop(2)
+let task: Task<String> = loop.spawn(name())
+print(values.join("-"))
+print(scores.get("Tom").to_string())
+print(loop.run_until(task))
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["1-2-3", "95", "Icoo"]);
+
+    let err = run(r#"
+let values: Array<Int> = [1, "x"]
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected Array<Int> for binding 'values' but got Array<Any>"));
+
+    let err = run(r#"
+let scores: Map<String, Int> = {"Tom": "A"}
+"#)
+    .unwrap_err();
+    assert!(err.contains(
+        "type error: expected Map<String, Int> for binding 'scores' but got Map<String, String>"
+    ));
+
+    let err = run(r#"
+async fn name() -> String:
+    return "Icoo"
+
+let loop = EventLoop(2)
+let task: Task<Int> = loop.spawn(name())
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected Task<Int> for binding 'task' but got Task<String>"));
+}

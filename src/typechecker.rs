@@ -10,6 +10,8 @@ pub fn check(program: &Program) -> IcooResult<()> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeInfo {
     Known(String),
+    Array(Box<TypeInfo>),
+    Map(Box<TypeInfo>, Box<TypeInfo>),
     Coroutine(Box<TypeInfo>),
     Task(Box<TypeInfo>),
     Unknown,
@@ -23,6 +25,8 @@ impl TypeInfo {
     fn name(&self) -> Option<&str> {
         match self {
             TypeInfo::Known(name) => Some(name),
+            TypeInfo::Array(_) => Some("Array"),
+            TypeInfo::Map(_, _) => Some("Map"),
             TypeInfo::Coroutine(_) => Some("Coroutine"),
             TypeInfo::Task(_) => Some("Task"),
             TypeInfo::Unknown => None,
@@ -33,6 +37,14 @@ impl TypeInfo {
         Self::Coroutine(Box::new(result))
     }
 
+    fn array(item: TypeInfo) -> Self {
+        Self::Array(Box::new(item))
+    }
+
+    fn map(key: TypeInfo, value: TypeInfo) -> Self {
+        Self::Map(Box::new(key), Box::new(value))
+    }
+
     fn task(result: TypeInfo) -> Self {
         Self::Task(Box::new(result))
     }
@@ -40,6 +52,10 @@ impl TypeInfo {
     fn display_name(&self) -> String {
         match self {
             TypeInfo::Known(name) => name.clone(),
+            TypeInfo::Array(item) => format!("Array<{}>", item.display_name()),
+            TypeInfo::Map(key, value) => {
+                format!("Map<{}, {}>", key.display_name(), value.display_name())
+            }
             TypeInfo::Coroutine(result) => format!("Coroutine<{}>", result.display_name()),
             TypeInfo::Task(result) => format!("Task<{}>", result.display_name()),
             TypeInfo::Unknown => "Unknown".to_string(),
@@ -49,7 +65,7 @@ impl TypeInfo {
 
 #[derive(Debug, Clone)]
 struct FunctionSig {
-    params: Vec<Option<String>>,
+    params: Vec<Option<TypeInfo>>,
     return_type: TypeInfo,
     is_async: bool,
 }
@@ -57,7 +73,7 @@ struct FunctionSig {
 #[derive(Debug, Clone)]
 struct ClassInfo {
     superclass: Option<String>,
-    fields: HashMap<String, String>,
+    fields: HashMap<String, TypeInfo>,
     methods: HashMap<String, FunctionSig>,
 }
 
@@ -71,8 +87,8 @@ enum NativeArity {
 #[derive(Debug, Clone)]
 struct NativeMethodSig {
     arity: NativeArity,
-    params: Vec<Option<String>>,
-    variadic: Option<String>,
+    params: Vec<Option<TypeInfo>>,
+    variadic: Option<TypeInfo>,
     return_type: TypeInfo,
 }
 
@@ -81,7 +97,7 @@ struct TypeChecker {
     functions: HashMap<String, FunctionSig>,
     classes: HashMap<String, ClassInfo>,
     scopes: Vec<HashMap<String, TypeInfo>>,
-    current_return: Option<String>,
+    current_return: Option<TypeInfo>,
     current_class: Option<String>,
 }
 
@@ -111,7 +127,7 @@ impl TypeChecker {
                 Stmt::Class(decl) => {
                     let mut fields = HashMap::new();
                     for field in &decl.fields {
-                        fields.insert(field.name.name.clone(), field.type_hint.name.clone());
+                        fields.insert(field.name.name.clone(), type_from_ref(&field.type_hint));
                     }
                     let mut methods = HashMap::new();
                     for method in &decl.methods {
@@ -150,7 +166,7 @@ impl TypeChecker {
                     if let Some(type_hint) = &decl.type_hint {
                         self.expect_assignable(
                             &value_type,
-                            &type_hint.name,
+                            &type_from_ref(type_hint),
                             &format!("binding '{}'", decl.name.name),
                             decl.name.span,
                         )?;
@@ -162,7 +178,7 @@ impl TypeChecker {
                 let binding_type = decl
                     .type_hint
                     .as_ref()
-                    .map(|type_hint| TypeInfo::known(type_hint.name.clone()))
+                    .map(type_from_ref)
                     .unwrap_or(inferred);
                 self.define(decl.name.name.clone(), binding_type);
             }
@@ -223,15 +239,12 @@ impl TypeChecker {
     fn check_function(&mut self, decl: &FunctionDecl) -> IcooResult<()> {
         self.push_scope();
         let previous_return = self.current_return.clone();
-        self.current_return = decl
-            .return_type
-            .as_ref()
-            .map(|type_ref| type_ref.name.clone());
+        self.current_return = decl.return_type.as_ref().map(type_from_ref);
         for param in &decl.params {
             let param_type = param
                 .type_hint
                 .as_ref()
-                .map(|type_hint| TypeInfo::known(type_hint.name.clone()))
+                .map(type_from_ref)
                 .unwrap_or(TypeInfo::Unknown);
             self.define(param.name.name.clone(), param_type);
         }
@@ -251,7 +264,7 @@ impl TypeChecker {
                 let value_type = self.infer_expr(initializer)?;
                 self.expect_assignable(
                     &value_type,
-                    &field.type_hint.name,
+                    &type_from_ref(&field.type_hint),
                     &format!("field '{}'", field.name.name),
                     field.name.span,
                 )?;
@@ -287,16 +300,18 @@ impl TypeChecker {
                 .map(TypeInfo::known)
                 .unwrap_or(TypeInfo::Unknown)),
             Expr::Array(values, _) => {
+                let mut item_type = TypeInfo::Unknown;
                 for value in values {
-                    self.infer_expr(value)?;
+                    item_type = common_type(&item_type, &self.infer_expr(value)?);
                 }
-                Ok(TypeInfo::known("Array"))
+                Ok(TypeInfo::array(item_type))
             }
             Expr::Map(entries, _) => {
+                let mut value_type = TypeInfo::Unknown;
                 for (_, value) in entries {
-                    self.infer_expr(value)?;
+                    value_type = common_type(&value_type, &self.infer_expr(value)?);
                 }
-                Ok(TypeInfo::known("Map"))
+                Ok(TypeInfo::map(TypeInfo::known("String"), value_type))
             }
             Expr::Template(parts, _) => {
                 for part in parts {
@@ -339,10 +354,7 @@ impl TypeChecker {
                 let value_type = self.infer_expr(value)?;
                 match target.as_ref() {
                     Expr::Variable(name) => {
-                        if let Some(expected) = self
-                            .lookup(&name.name)
-                            .and_then(|ty| ty.name().map(str::to_string))
-                        {
+                        if let Some(expected) = self.lookup(&name.name) {
                             self.expect_assignable(
                                 &value_type,
                                 &expected,
@@ -383,7 +395,12 @@ impl TypeChecker {
                     TypeInfo::Task(result) => Ok(*result),
                     TypeInfo::Unknown => Ok(TypeInfo::Unknown),
                     other => {
-                        self.expect_assignable(&other, "Task", "await operand", expr.span())?;
+                        self.expect_assignable(
+                            &other,
+                            &TypeInfo::known("Task"),
+                            "await operand",
+                            expr.span(),
+                        )?;
                         Ok(TypeInfo::Unknown)
                     }
                 }
@@ -453,7 +470,12 @@ impl TypeChecker {
                     TypeInfo::Coroutine(result) => Ok(Some(TypeInfo::task(*result))),
                     TypeInfo::Unknown => Ok(Some(TypeInfo::task(TypeInfo::Unknown))),
                     other => {
-                        self.expect_assignable(&other, "Coroutine", "argument 1", span)?;
+                        self.expect_assignable(
+                            &other,
+                            &TypeInfo::known("Coroutine"),
+                            "argument 1",
+                            span,
+                        )?;
                         Ok(Some(TypeInfo::task(TypeInfo::Unknown)))
                     }
                 }
@@ -464,7 +486,12 @@ impl TypeChecker {
                     TypeInfo::Task(result) => Ok(Some(*result)),
                     TypeInfo::Unknown => Ok(Some(TypeInfo::Unknown)),
                     other => {
-                        self.expect_assignable(&other, "Task", "argument 1", span)?;
+                        self.expect_assignable(
+                            &other,
+                            &TypeInfo::known("Task"),
+                            "argument 1",
+                            span,
+                        )?;
                         Ok(Some(TypeInfo::Unknown))
                     }
                 }
@@ -578,8 +605,8 @@ impl TypeChecker {
             let expected = sig
                 .params
                 .get(index)
-                .and_then(|expected| expected.as_deref())
-                .or(sig.variadic.as_deref());
+                .and_then(|expected| expected.as_ref())
+                .or(sig.variadic.as_ref());
             if let Some(expected) = expected {
                 self.expect_assignable(
                     &arg_type,
@@ -595,20 +622,17 @@ impl TypeChecker {
     fn expect_assignable(
         &self,
         actual: &TypeInfo,
-        expected: &str,
+        expected: &TypeInfo,
         context: &str,
         span: Span,
     ) -> IcooResult<()> {
-        let Some(actual_name) = actual.name() else {
-            return Ok(());
-        };
-        if self.is_assignable(actual_name, expected) {
+        if self.is_assignable(actual, expected) {
             Ok(())
         } else {
             Err(type_error(
                 format!(
                     "expected {} for {} but got {}",
-                    expected,
+                    expected.display_name(),
                     context,
                     actual.display_name()
                 ),
@@ -624,16 +648,41 @@ impl TypeChecker {
         }
     }
 
-    fn is_assignable(&self, actual: &str, expected: &str) -> bool {
-        if expected == "Any" || actual == expected {
+    fn is_assignable(&self, actual: &TypeInfo, expected: &TypeInfo) -> bool {
+        match (actual, expected) {
+            (_, TypeInfo::Known(expected)) if expected == "Any" => return true,
+            (TypeInfo::Unknown, _) => return true,
+            (TypeInfo::Array(actual_item), TypeInfo::Array(expected_item)) => {
+                return self.is_assignable(actual_item, expected_item);
+            }
+            (
+                TypeInfo::Map(actual_key, actual_value),
+                TypeInfo::Map(expected_key, expected_value),
+            ) => {
+                return self.is_assignable(actual_key, expected_key)
+                    && self.is_assignable(actual_value, expected_value);
+            }
+            (TypeInfo::Task(actual_result), TypeInfo::Task(expected_result))
+            | (TypeInfo::Coroutine(actual_result), TypeInfo::Coroutine(expected_result)) => {
+                return self.is_assignable(actual_result, expected_result);
+            }
+            _ => {}
+        }
+        let Some(actual_name) = actual.name() else {
+            return true;
+        };
+        let Some(expected_name) = expected.name() else {
+            return true;
+        };
+        if actual_name == expected_name {
             return true;
         }
-        let mut current = Some(actual.to_string());
+        let mut current = Some(actual_name.to_string());
         while let Some(class_name) = current {
             let Some(class) = self.classes.get(&class_name) else {
                 break;
             };
-            if class.superclass.as_deref() == Some(expected) {
+            if class.superclass.as_deref() == Some(expected_name) {
                 return true;
             }
             current = class.superclass.clone();
@@ -641,7 +690,7 @@ impl TypeChecker {
         false
     }
 
-    fn find_field_type(&self, class_name: &str, field_name: &str) -> Option<String> {
+    fn find_field_type(&self, class_name: &str, field_name: &str) -> Option<TypeInfo> {
         let mut current = Some(class_name.to_string());
         while let Some(name) = current {
             let class = self.classes.get(&name)?;
@@ -655,7 +704,7 @@ impl TypeChecker {
 
     fn find_property_type(&self, type_name: &str, property_name: &str) -> Option<TypeInfo> {
         if let Some(field_type) = self.find_field_type(type_name, property_name) {
-            return Some(TypeInfo::known(field_type));
+            return Some(field_type);
         }
         if self.find_method_sig(type_name, property_name).is_some() {
             return Some(TypeInfo::known("Function"));
@@ -722,19 +771,61 @@ fn function_sig(decl: &FunctionDecl) -> FunctionSig {
         params: decl
             .params
             .iter()
-            .map(|param| {
-                param
-                    .type_hint
-                    .as_ref()
-                    .map(|type_hint| type_hint.name.clone())
-            })
+            .map(|param| param.type_hint.as_ref().map(type_from_ref))
             .collect(),
         return_type: decl
             .return_type
             .as_ref()
-            .map(|type_hint| TypeInfo::known(type_hint.name.clone()))
+            .map(type_from_ref)
             .unwrap_or(TypeInfo::Unknown),
         is_async: decl.is_coroutine,
+    }
+}
+
+fn type_from_ref(type_ref: &TypeRef) -> TypeInfo {
+    match type_ref.name.as_str() {
+        "Array" => TypeInfo::array(
+            type_ref
+                .args
+                .first()
+                .map(type_from_ref)
+                .unwrap_or(TypeInfo::Unknown),
+        ),
+        "Map" => TypeInfo::map(
+            type_ref
+                .args
+                .first()
+                .map(type_from_ref)
+                .unwrap_or_else(|| TypeInfo::known("String")),
+            type_ref
+                .args
+                .get(1)
+                .map(type_from_ref)
+                .unwrap_or(TypeInfo::Unknown),
+        ),
+        "Task" => TypeInfo::task(
+            type_ref
+                .args
+                .first()
+                .map(type_from_ref)
+                .unwrap_or(TypeInfo::Unknown),
+        ),
+        "Coroutine" => TypeInfo::coroutine(
+            type_ref
+                .args
+                .first()
+                .map(type_from_ref)
+                .unwrap_or(TypeInfo::Unknown),
+        ),
+        _ => TypeInfo::known(type_ref.name.clone()),
+    }
+}
+
+fn common_type(left: &TypeInfo, right: &TypeInfo) -> TypeInfo {
+    match (left, right) {
+        (TypeInfo::Unknown, other) | (other, TypeInfo::Unknown) => other.clone(),
+        (a, b) if a == b => a.clone(),
+        _ => TypeInfo::known("Any"),
     }
 }
 
@@ -760,7 +851,7 @@ fn native_functions() -> HashMap<String, FunctionSig> {
     functions.insert(
         "sleep".to_string(),
         FunctionSig {
-            params: vec![Some("Int".to_string())],
+            params: vec![Some(TypeInfo::known("Int"))],
             return_type: TypeInfo::task(TypeInfo::known("Nil")),
             is_async: false,
         },
@@ -768,7 +859,7 @@ fn native_functions() -> HashMap<String, FunctionSig> {
     functions.insert(
         "EventLoop".to_string(),
         FunctionSig {
-            params: vec![Some("Int".to_string())],
+            params: vec![Some(TypeInfo::known("Int"))],
             return_type: TypeInfo::known("EventLoop"),
             is_async: false,
         },
@@ -986,9 +1077,9 @@ fn native_sig(
         arity,
         params: params
             .into_iter()
-            .map(|param| param.map(str::to_string))
+            .map(|param| param.map(TypeInfo::known))
             .collect(),
-        variadic: variadic.map(str::to_string),
+        variadic: variadic.map(TypeInfo::known),
         return_type,
     }
 }

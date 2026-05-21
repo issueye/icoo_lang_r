@@ -89,7 +89,32 @@ pub struct Identifier {
 #[derive(Debug, Clone)]
 pub struct TypeRef {
     pub name: String,
+    pub args: Vec<TypeRef>,
     pub span: Span,
+}
+
+impl TypeRef {
+    pub fn simple(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            args: Vec::new(),
+            span,
+        }
+    }
+
+    pub fn display_name(&self) -> String {
+        if self.args.is_empty() {
+            self.name.clone()
+        } else {
+            let args = self
+                .args
+                .iter()
+                .map(TypeRef::display_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}<{}>", self.name, args)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

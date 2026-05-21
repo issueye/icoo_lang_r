@@ -1797,7 +1797,7 @@ fn check_value_type(
         Err(IcooError::runtime(
             format!(
                 "expected {} for {} but got {}",
-                type_hint.name,
+                type_hint.display_name(),
                 context,
                 value.type_name()
             ),

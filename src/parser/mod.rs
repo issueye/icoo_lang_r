@@ -558,8 +558,22 @@ impl Parser {
 
     fn type_ref(&mut self) -> IcooResult<TypeRef> {
         let ident = self.identifier("expected type name")?;
+        let mut args = Vec::new();
+        if self.matches(&TokenKind::Less) {
+            loop {
+                args.push(self.type_ref()?);
+                if !self.matches(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.consume(
+                TokenKind::Greater,
+                "expected '>' after generic type arguments",
+            )?;
+        }
         Ok(TypeRef {
             name: ident.name,
+            args,
             span: ident.span,
         })
     }
