@@ -1141,6 +1141,64 @@ print(response.get("body"))
 }
 
 #[test]
+fn supports_net_http_client_stream_receive() {
+    let dir = PathBuf::from("target/icoo_module_tests/http_client_stream");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn stream(req: Map<String, Any>, res: WebInoResponse):
+    res.write("a")
+    res.write("b")
+    res.write("c")
+    res.end()
+
+app.get("/stream", stream)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_path = dir.join("client.icoo");
+    fs::write(
+        &client_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+
+let parts = []
+
+fn on_chunk(chunk: String):
+    parts.push(chunk)
+
+let response = client.stream_get("http://127.0.0.1:{}/stream", on_chunk)
+print(response.get("status").to_string())
+print(response.get("headers").get("transfer-encoding"))
+print(response.get("chunks").to_string())
+print(parts.join("|"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let output = run_file(client_path).unwrap();
+    assert_eq!(output, vec!["200", "chunked", "3", "a|b|c"]);
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
 fn supports_std_web_ino_file_downloads() {
     let dir = PathBuf::from("target/icoo_module_tests/web_ino_download");
     fs::create_dir_all(&dir).unwrap();

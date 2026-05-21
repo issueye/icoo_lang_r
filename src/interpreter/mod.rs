@@ -1367,6 +1367,19 @@ impl Interpreter {
                 let body = expect_string(&args[1], span)?;
                 http_client_request("POST", &url, &body, span)
             }
+            ("net.http.client", "stream_get") => {
+                expect_arity(&args, 2, span)?;
+                let url = expect_string(&args[0], span)?;
+                let handler = args[1].clone();
+                self.http_client_stream_request("GET", &url, "", handler, span)
+            }
+            ("net.http.client", "stream_post") => {
+                expect_arity(&args, 3, span)?;
+                let url = expect_string(&args[0], span)?;
+                let body = expect_string(&args[1], span)?;
+                let handler = args[2].clone();
+                self.http_client_stream_request("POST", &url, &body, handler, span)
+            }
             ("net.http.server", "serve_once") => {
                 expect_arity(&args, 3, span)?;
                 let host = expect_string(&args[0], span)?;
@@ -1450,6 +1463,51 @@ impl Interpreter {
                 Some(span),
             )),
         }
+    }
+
+    fn http_client_stream_request(
+        &mut self,
+        method: &str,
+        url: &str,
+        body: &str,
+        handler: Value,
+        span: Span,
+    ) -> IcooResult<Value> {
+        let mut stream = open_http_client_request(method, url, body, span)?;
+        let response = read_http_response_head(&mut stream, span)?;
+        let chunk_count = if http_headers_transfer_chunked(&response.headers) {
+            http_client_stream_chunked(&mut stream, response.body_prefix, span, |chunk| {
+                self.call_http_stream_handler(&handler, chunk, span)
+            })?
+        } else if let Some(content_length) = http_headers_content_length(&response.headers) {
+            http_client_stream_content_length(
+                &mut stream,
+                response.body_prefix,
+                content_length,
+                span,
+                |chunk| self.call_http_stream_handler(&handler, chunk, span),
+            )?
+        } else {
+            http_client_stream_until_close(&mut stream, response.body_prefix, span, |chunk| {
+                self.call_http_stream_handler(&handler, chunk, span)
+            })?
+        };
+        Ok(http_client_stream_response_value(
+            response.status,
+            response.headers,
+            chunk_count,
+        ))
+    }
+
+    fn call_http_stream_handler(
+        &mut self,
+        handler: &Value,
+        chunk: Vec<u8>,
+        span: Span,
+    ) -> IcooResult<()> {
+        let text = String::from_utf8_lossy(&chunk).into_owned();
+        self.call_value(handler.clone(), vec![Value::String(text)], span)
+            .map(|_| ())
     }
 
     fn web_ino_app_method(
@@ -2982,7 +3040,7 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
                 | "get_env"
                 | "has_env"
         ),
-        "net.http.client" => matches!(name, "get" | "post"),
+        "net.http.client" => matches!(name, "get" | "post" | "stream_get" | "stream_post"),
         "net.http.server" => matches!(name, "serve_once"),
         "web.ino" => matches!(name, "App" | "create"),
         _ => false,
@@ -3067,6 +3125,12 @@ struct ParsedHttpUrl {
     path: String,
 }
 
+struct ParsedHttpResponseHead {
+    status: i64,
+    headers: HashMap<String, Value>,
+    body_prefix: Vec<u8>,
+}
+
 fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(IcooError::runtime(
@@ -3095,7 +3159,12 @@ fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
     Ok(ParsedHttpUrl { host, port, path })
 }
 
-fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooResult<Value> {
+fn open_http_client_request(
+    method: &str,
+    url: &str,
+    body: &str,
+    span: Span,
+) -> IcooResult<std::net::TcpStream> {
     let parsed = parse_http_url(url, span)?;
     let mut stream =
         std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
@@ -3124,11 +3193,49 @@ fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooR
     std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
         IcooError::runtime(format!("http client write failed: {}", err), Some(span))
     })?;
+    Ok(stream)
+}
+
+fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooResult<Value> {
+    let mut stream = open_http_client_request(method, url, body, span)?;
     let mut response = String::new();
     std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
         IcooError::runtime(format!("http client read failed: {}", err), Some(span))
     })?;
     parse_http_response(&response, span)
+}
+
+fn read_http_response_head(
+    stream: &mut std::net::TcpStream,
+    span: Span,
+) -> IcooResult<ParsedHttpResponseHead> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let body_start = loop {
+        let size = std::io::Read::read(stream, &mut buffer).map_err(|err| {
+            IcooError::runtime(
+                format!("http client stream read failed: {}", err),
+                Some(span),
+            )
+        })?;
+        if size == 0 {
+            return Err(IcooError::runtime(
+                "invalid HTTP response: missing header terminator",
+                Some(span),
+            ));
+        }
+        bytes.extend_from_slice(&buffer[..size]);
+        if let Some(body_start) = find_http_body_start(&bytes) {
+            break body_start;
+        }
+    };
+    let head = String::from_utf8_lossy(&bytes[..body_start - 4]).into_owned();
+    let (status, headers) = parse_http_response_head(&head, span)?;
+    Ok(ParsedHttpResponseHead {
+        status,
+        headers,
+        body_prefix: bytes[body_start..].to_vec(),
+    })
 }
 
 fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
@@ -3138,6 +3245,23 @@ fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
             Some(span),
         )
     })?;
+    let (status, headers) = parse_http_response_head(head, span)?;
+    let body = if http_headers_transfer_chunked(&headers) {
+        decode_chunked_body(body, span)?
+    } else {
+        body.to_string()
+    };
+    let mut result = HashMap::new();
+    result.insert("status".to_string(), Value::Int(status));
+    result.insert("body".to_string(), Value::String(body));
+    result.insert(
+        "headers".to_string(),
+        Value::Map(Rc::new(RefCell::new(headers))),
+    );
+    Ok(Value::Map(Rc::new(RefCell::new(result))))
+}
+
+fn parse_http_response_head(head: &str, span: Span) -> IcooResult<(i64, HashMap<String, Value>)> {
     let mut lines = head.lines();
     let status_line = lines
         .next()
@@ -3157,22 +3281,38 @@ fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
             );
         }
     }
-    let body = if matches!(
+    Ok((status, headers))
+}
+
+fn http_headers_transfer_chunked(headers: &HashMap<String, Value>) -> bool {
+    matches!(
         headers.get("transfer-encoding"),
         Some(Value::String(value)) if value.eq_ignore_ascii_case("chunked")
-    ) {
-        decode_chunked_body(body, span)?
-    } else {
-        body.to_string()
+    )
+}
+
+fn http_headers_content_length(headers: &HashMap<String, Value>) -> Option<usize> {
+    let Some(Value::String(value)) = headers.get("content-length") else {
+        return None;
     };
+    value.parse::<usize>().ok()
+}
+
+fn http_client_stream_response_value(
+    status: i64,
+    headers: HashMap<String, Value>,
+    chunk_count: usize,
+) -> Value {
     let mut result = HashMap::new();
     result.insert("status".to_string(), Value::Int(status));
-    result.insert("body".to_string(), Value::String(body));
+    result.insert("body".to_string(), Value::String(String::new()));
     result.insert(
         "headers".to_string(),
         Value::Map(Rc::new(RefCell::new(headers))),
     );
-    Ok(Value::Map(Rc::new(RefCell::new(result))))
+    result.insert("streamed".to_string(), Value::Bool(true));
+    result.insert("chunks".to_string(), Value::Int(chunk_count as i64));
+    Value::Map(Rc::new(RefCell::new(result)))
 }
 
 fn decode_chunked_body(body: &str, span: Span) -> IcooResult<String> {
@@ -3219,6 +3359,140 @@ fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {
         .windows(2)
         .position(|window| window == b"\r\n")
         .map(|offset| start + offset)
+}
+
+fn http_client_stream_chunked<F>(
+    stream: &mut std::net::TcpStream,
+    mut buffer: Vec<u8>,
+    span: Span,
+    mut on_chunk: F,
+) -> IcooResult<usize>
+where
+    F: FnMut(Vec<u8>) -> IcooResult<()>,
+{
+    let mut chunk_count = 0;
+    loop {
+        while find_crlf(&buffer, 0).is_none() {
+            read_more_http_stream_bytes(stream, &mut buffer, span)?;
+        }
+        let line_end = find_crlf(&buffer, 0).expect("checked above");
+        let size_text = std::str::from_utf8(&buffer[..line_end])
+            .map_err(|_| IcooError::runtime("invalid chunked response size", Some(span)))?;
+        let size_hex = size_text.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| IcooError::runtime("invalid chunked response size", Some(span)))?;
+        buffer.drain(..line_end + 2);
+        if size == 0 {
+            break;
+        }
+        while buffer.len() < size + 2 {
+            read_more_http_stream_bytes(stream, &mut buffer, span)?;
+        }
+        if buffer.get(size..size + 2) != Some(b"\r\n") {
+            return Err(IcooError::runtime(
+                "invalid chunked response: missing chunk terminator",
+                Some(span),
+            ));
+        }
+        let chunk = buffer[..size].to_vec();
+        buffer.drain(..size + 2);
+        on_chunk(chunk)?;
+        chunk_count += 1;
+    }
+    Ok(chunk_count)
+}
+
+fn http_client_stream_content_length<F>(
+    stream: &mut std::net::TcpStream,
+    buffer: Vec<u8>,
+    content_length: usize,
+    span: Span,
+    mut on_chunk: F,
+) -> IcooResult<usize>
+where
+    F: FnMut(Vec<u8>) -> IcooResult<()>,
+{
+    let mut chunk_count = 0;
+    let mut delivered = 0;
+    if !buffer.is_empty() && content_length > 0 {
+        let size = buffer.len().min(content_length);
+        on_chunk(buffer[..size].to_vec())?;
+        delivered += size;
+        chunk_count += 1;
+    }
+    let mut read_buffer = [0_u8; 4096];
+    while delivered < content_length {
+        let max_read = (content_length - delivered).min(read_buffer.len());
+        let size = std::io::Read::read(stream, &mut read_buffer[..max_read]).map_err(|err| {
+            IcooError::runtime(
+                format!("http client stream read failed: {}", err),
+                Some(span),
+            )
+        })?;
+        if size == 0 {
+            return Err(IcooError::runtime(
+                "invalid HTTP response: incomplete body",
+                Some(span),
+            ));
+        }
+        on_chunk(read_buffer[..size].to_vec())?;
+        delivered += size;
+        chunk_count += 1;
+    }
+    Ok(chunk_count)
+}
+
+fn http_client_stream_until_close<F>(
+    stream: &mut std::net::TcpStream,
+    buffer: Vec<u8>,
+    span: Span,
+    mut on_chunk: F,
+) -> IcooResult<usize>
+where
+    F: FnMut(Vec<u8>) -> IcooResult<()>,
+{
+    let mut chunk_count = 0;
+    if !buffer.is_empty() {
+        on_chunk(buffer)?;
+        chunk_count += 1;
+    }
+    let mut read_buffer = [0_u8; 4096];
+    loop {
+        let size = std::io::Read::read(stream, &mut read_buffer).map_err(|err| {
+            IcooError::runtime(
+                format!("http client stream read failed: {}", err),
+                Some(span),
+            )
+        })?;
+        if size == 0 {
+            break;
+        }
+        on_chunk(read_buffer[..size].to_vec())?;
+        chunk_count += 1;
+    }
+    Ok(chunk_count)
+}
+
+fn read_more_http_stream_bytes(
+    stream: &mut std::net::TcpStream,
+    buffer: &mut Vec<u8>,
+    span: Span,
+) -> IcooResult<()> {
+    let mut read_buffer = [0_u8; 4096];
+    let size = std::io::Read::read(stream, &mut read_buffer).map_err(|err| {
+        IcooError::runtime(
+            format!("http client stream read failed: {}", err),
+            Some(span),
+        )
+    })?;
+    if size == 0 {
+        return Err(IcooError::runtime(
+            "invalid chunked response: incomplete chunk",
+            Some(span),
+        ));
+    }
+    buffer.extend_from_slice(&read_buffer[..size]);
+    Ok(())
 }
 
 fn http_server_serve_once(host: &str, port: u16, body: &str, span: Span) -> IcooResult<()> {

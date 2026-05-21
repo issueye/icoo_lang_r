@@ -981,7 +981,7 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "exe_path" | "get_env") => Some(TypeInfo::Unknown),
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
-        ("NetHttpClient", "get" | "post") => Some(TypeInfo::map(
+        ("NetHttpClient", "get" | "post" | "stream_get" | "stream_post") => Some(TypeInfo::map(
             TypeInfo::known("String"),
             TypeInfo::known("Any"),
         )),
@@ -1162,6 +1162,18 @@ fn native_method_sig(
         ("NetHttpClient", "post") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_get") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("Function")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_post") => Some(native_sig(
+            NativeArity::Exact(3),
+            vec![Some("String"), Some("String"), Some("Function")],
             None,
             return_type,
         )),

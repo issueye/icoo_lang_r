@@ -1370,6 +1370,8 @@ toml.parse(text: String) -> Any
 ```text
 http_client.get(url: String) -> Map<String, Any>
 http_client.post(url: String, body: String) -> Map<String, Any>
+http_client.stream_get(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_post(url: String, body: String, handler: Function) -> Map<String, Any>
 ```
 
 返回的 Map 至少包含：
@@ -1380,7 +1382,18 @@ body: String
 headers: Map<String, String>
 ```
 
-第一版只支持 `http://`，不支持 HTTPS、重定向、流式响应和自定义请求头。
+`stream_get` 和 `stream_post` 用于流式接收响应体。客户端会先读取响应头，然后每收到一个响应片段就调用 handler；如果服务端使用 `Transfer-Encoding: chunked`，则按 HTTP chunk 调用；普通 `Content-Length` 或连接关闭响应按读取片段调用。handler 接收一个 `String` 参数，适合文本流、SSE 风格输出、日志输出等场景。流式接口返回的 Map 包含 `status`、`headers`、`body`、`streamed` 和 `chunks`，其中 `body` 为空字符串，正文由 handler 消费。
+
+```python
+let parts = []
+
+fn on_chunk(chunk: String):
+    parts.push(chunk)
+
+let response = http_client.stream_get("http://127.0.0.1:8080/events", on_chunk)
+```
+
+当前 HTTP client 只支持 `http://`，不支持 HTTPS、重定向和自定义请求头。流式接收当前以字符串形式交给 handler，二进制流式 API 后续再扩展。
 
 `std.net.http.server` 模块：
 
