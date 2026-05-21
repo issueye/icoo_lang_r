@@ -577,6 +577,58 @@ fs.write_text("target/icoo_fs_test.txt", 1)
 }
 
 #[test]
+fn supports_imported_io_and_os_builtin_modules() {
+    let output = run(r#"
+import "std.io" as io
+import "std.os" as os
+
+let path = "target/icoo_io_test.txt"
+io.write_text(path, "hello")
+io.append_text(path, " io")
+io.print(io.read_text(path))
+print(os.name().len() > 0)
+print(os.family().len() > 0)
+print(os.arch().len() > 0)
+print(os.pid() > 0)
+print(os.cwd().contains("icoo_lang_r").to_string())
+print((os.args().len() >= 1).to_string())
+print(os.has_env("__ICOO_LANG_R_TEST_MISSING__").to_string())
+print(os.get_env("__ICOO_LANG_R_TEST_MISSING__").to_string())
+"#)
+    .unwrap();
+    assert_eq!(
+        output,
+        vec!["hello io", "true", "true", "true", "true", "true", "true", "false", "nil"]
+    );
+
+    let err = run(r#"
+io.print("x")
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'io'"));
+
+    let err = run(r#"
+os.name()
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'os'"));
+
+    let err = run(r#"
+import "std.io" as io
+io.read_text(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.os" as os
+os.has_env(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+}
+
+#[test]
 fn supports_file_modules_imports_and_exports() {
     let dir = PathBuf::from("target/icoo_module_tests/basic");
     fs::create_dir_all(&dir).unwrap();

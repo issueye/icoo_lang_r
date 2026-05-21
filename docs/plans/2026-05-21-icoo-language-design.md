@@ -1314,9 +1314,38 @@ fs.list_dir(path: String) -> Array<String>
 
 ```python
 import "std.fs" as fs
+import "std.io" as io
+import "std.os" as os
 import "std.net.http.client" as http_client
 import "std.net.http.server" as http_server
 ```
+
+`std.io` 模块：
+
+```text
+io.print(value: Any) -> Nil
+io.read_text(path: String) -> String
+io.write_text(path: String, content: String) -> Nil
+io.append_text(path: String, content: String) -> Nil
+```
+
+`io.print` 使用当前解释器输出通道，语义与全局 `print` 一致。`read_text`、`write_text`、`append_text` 是文本 I/O 的第一版能力；二进制流、标准输入和异步 I/O 后续再设计。
+
+`std.os` 模块：
+
+```text
+os.name() -> String
+os.family() -> String
+os.arch() -> String
+os.pid() -> Int
+os.cwd() -> String
+os.args() -> Array<String>
+os.exe_path() -> String | Nil
+os.get_env(name: String) -> String | Nil
+os.has_env(name: String) -> Bool
+```
+
+`std.os` 第一版只提供读取进程和平台信息的能力，不提供 `set_env`、`exit`、进程启动等带强副作用的能力。后续可以在权限模型明确后再扩展。
 
 `std.net.http.client` 模块：
 
@@ -1676,15 +1705,17 @@ env
 fs
 ```
 
-用户模块系统不替代内置模块，而是补充本地文件拆分能力。第一版保持内置模块全局可用，避免在还没有包解析器之前引入 `import "std/fs"` 这类语法。
+用户模块系统不替代内置模块，而是补充本地文件拆分能力。历史内置模块保持全局可用；新增内置库使用 `std.` 命名空间，通过字符串模块名导入。
 
-后续可以增加标准库导入别名：
+当前已经支持标准库导入：
 
 ```python
-import "std/fs" as fs
+import "std.fs" as fs
+import "std.io" as io
+import "std.os" as os
 ```
 
-但这需要先定义标准库路径、包名解析和冲突规则，不放入模块系统 MVP。
+标准库模块名不映射到本地文件路径，因此不会和 `./`、`../` 开头的用户模块路径冲突。
 
 ### 16.11 架构决策记录
 

@@ -1238,6 +1238,93 @@ impl Interpreter {
                 entries.sort_by_key(Value::display);
                 Ok(Value::Array(Rc::new(RefCell::new(entries))))
             }
+            ("io", "print") => {
+                expect_arity(&args, 1, span)?;
+                (self.output)(args[0].display());
+                Ok(Value::Nil)
+            }
+            ("io", "read_text") => {
+                expect_arity(&args, 1, span)?;
+                let path = expect_string(&args[0], span)?;
+                std::fs::read_to_string(&path)
+                    .map(Value::String)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("io.read_text() failed: {}", err), Some(span))
+                    })
+            }
+            ("io", "write_text") => {
+                expect_arity(&args, 2, span)?;
+                let path = expect_string(&args[0], span)?;
+                let content = expect_string(&args[1], span)?;
+                std::fs::write(&path, content)
+                    .map(|_| Value::Nil)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("io.write_text() failed: {}", err), Some(span))
+                    })
+            }
+            ("io", "append_text") => {
+                expect_arity(&args, 2, span)?;
+                let path = expect_string(&args[0], span)?;
+                let content = expect_string(&args[1], span)?;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .and_then(|mut file| {
+                        use std::io::Write;
+                        file.write_all(content.as_bytes())
+                    })
+                    .map(|_| Value::Nil)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("io.append_text() failed: {}", err), Some(span))
+                    })
+            }
+            ("os", "name") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::String(std::env::consts::OS.to_string()))
+            }
+            ("os", "family") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::String(std::env::consts::FAMILY.to_string()))
+            }
+            ("os", "arch") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::String(std::env::consts::ARCH.to_string()))
+            }
+            ("os", "pid") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(std::process::id() as i64))
+            }
+            ("os", "cwd") => {
+                expect_arity(&args, 0, span)?;
+                std::env::current_dir()
+                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                    .map_err(|err| {
+                        IcooError::runtime(format!("os.cwd() failed: {}", err), Some(span))
+                    })
+            }
+            ("os", "args") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Array(Rc::new(RefCell::new(
+                    std::env::args().map(Value::String).collect(),
+                ))))
+            }
+            ("os", "exe_path") => {
+                expect_arity(&args, 0, span)?;
+                Ok(std::env::current_exe()
+                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                    .unwrap_or(Value::Nil))
+            }
+            ("os", "get_env") => {
+                expect_arity(&args, 1, span)?;
+                let name = expect_string(&args[0], span)?;
+                Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
+            }
+            ("os", "has_env") => {
+                expect_arity(&args, 1, span)?;
+                let name = expect_string(&args[0], span)?;
+                Ok(Value::Bool(std::env::var_os(name).is_some()))
+            }
             ("net.http.client", "get") => {
                 expect_arity(&args, 1, span)?;
                 let url = expect_string(&args[0], span)?;
@@ -2369,6 +2456,19 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
             name,
             "exists" | "is_file" | "is_dir" | "read_text" | "write_text" | "list_dir"
         ),
+        "io" => matches!(name, "print" | "read_text" | "write_text" | "append_text"),
+        "os" => matches!(
+            name,
+            "name"
+                | "family"
+                | "arch"
+                | "pid"
+                | "cwd"
+                | "args"
+                | "exe_path"
+                | "get_env"
+                | "has_env"
+        ),
         "net.http.client" => matches!(name, "get" | "post"),
         "net.http.server" => matches!(name, "serve_once"),
         _ => false,
@@ -2395,6 +2495,8 @@ fn importable_native_module_name(source: &str) -> Option<&'static str> {
         "std.json" => Some("std.json"),
         "std.env" => Some("std.env"),
         "std.fs" => Some("std.fs"),
+        "std.io" => Some("std.io"),
+        "std.os" => Some("std.os"),
         "std.net.http.client" => Some("std.net.http.client"),
         "std.net.http.server" => Some("std.net.http.server"),
         _ => None,

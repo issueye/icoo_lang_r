@@ -878,6 +878,8 @@ fn import_module_type(source: &str) -> TypeInfo {
         "std.json" => TypeInfo::known("Json"),
         "std.env" => TypeInfo::known("Env"),
         "std.fs" => TypeInfo::known("Fs"),
+        "std.io" => TypeInfo::known("Io"),
+        "std.os" => TypeInfo::known("Os"),
         "std.net.http.client" => TypeInfo::known("NetHttpClient"),
         "std.net.http.server" => TypeInfo::known("NetHttpServer"),
         _ => TypeInfo::known("Module"),
@@ -967,6 +969,13 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Fs", "read_text") => Some(TypeInfo::known("String")),
         ("Fs", "write_text") => Some(TypeInfo::known("Nil")),
         ("Fs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
+        ("Io", "print" | "write_text" | "append_text") => Some(TypeInfo::known("Nil")),
+        ("Io", "read_text") => Some(TypeInfo::known("String")),
+        ("Os", "name" | "family" | "arch" | "cwd") => Some(TypeInfo::known("String")),
+        ("Os", "pid") => Some(TypeInfo::known("Int")),
+        ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
+        ("Os", "exe_path" | "get_env") => Some(TypeInfo::Unknown),
+        ("Os", "has_env") => Some(TypeInfo::known("Bool")),
         ("NetHttpClient", "get" | "post") => Some(TypeInfo::map(
             TypeInfo::known("String"),
             TypeInfo::known("Any"),
@@ -1054,6 +1063,13 @@ fn native_method_sig(
         | ("Time", "now_sec")
         | ("Env", "cwd")
         | ("Env", "args")
+        | ("Os", "name")
+        | ("Os", "family")
+        | ("Os", "arch")
+        | ("Os", "pid")
+        | ("Os", "cwd")
+        | ("Os", "args")
+        | ("Os", "exe_path")
         | ("EventLoop", "run")
         | ("EventLoop", "stop")
         | ("EventLoop", "is_stopped")
@@ -1110,6 +1126,30 @@ fn native_method_sig(
         ("Fs", "write_text") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("Io", "print") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Any")],
+            None,
+            return_type,
+        )),
+        ("Io", "read_text") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Io", "write_text" | "append_text") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("Os", "get_env" | "has_env") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
             None,
             return_type,
         )),
