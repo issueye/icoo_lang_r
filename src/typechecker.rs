@@ -876,6 +876,8 @@ fn import_module_type(source: &str) -> TypeInfo {
         "std.math" => TypeInfo::known("Math"),
         "std.time" => TypeInfo::known("Time"),
         "std.json" => TypeInfo::known("Json"),
+        "std.yaml" => TypeInfo::known("Yaml"),
+        "std.toml" => TypeInfo::known("Toml"),
         "std.env" => TypeInfo::known("Env"),
         "std.io" => TypeInfo::known("Io"),
         "std.io.fs" => TypeInfo::known("IoFs"),
@@ -960,6 +962,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Time", "now_ms" | "now_sec") => Some(TypeInfo::known("Int")),
         ("Json", "stringify") => Some(TypeInfo::known("String")),
         ("Json", "parse") => Some(TypeInfo::Unknown),
+        ("Yaml", "stringify") => Some(TypeInfo::known("String")),
+        ("Yaml", "parse") => Some(TypeInfo::Unknown),
+        ("Toml", "stringify") => Some(TypeInfo::known("String")),
+        ("Toml", "parse") => Some(TypeInfo::Unknown),
         ("Env", "cwd") => Some(TypeInfo::known("String")),
         ("Env", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Env", "get") => Some(TypeInfo::Unknown),
@@ -1097,13 +1103,13 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("Json", "stringify") => Some(native_sig(
+        ("Json" | "Yaml" | "Toml", "stringify") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Any")],
             None,
             return_type,
         )),
-        ("Json", "parse") => Some(native_sig(
+        ("Json" | "Yaml" | "Toml", "parse") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("String")],
             None,

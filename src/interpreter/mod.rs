@@ -1163,6 +1163,38 @@ impl Interpreter {
                 })?;
                 json_to_value(parsed, span)
             }
+            ("yaml", "stringify") => {
+                expect_arity(&args, 1, span)?;
+                serde_yml::to_string(&value_to_json(&args[0], span)?)
+                    .map(Value::String)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("yaml.stringify() failed: {}", err), Some(span))
+                    })
+            }
+            ("yaml", "parse") => {
+                expect_arity(&args, 1, span)?;
+                let text = expect_string(&args[0], span)?;
+                let parsed = serde_yml::from_str::<serde_json::Value>(&text).map_err(|err| {
+                    IcooError::runtime(format!("yaml.parse() failed: {}", err), Some(span))
+                })?;
+                json_to_value(parsed, span)
+            }
+            ("toml", "stringify") => {
+                expect_arity(&args, 1, span)?;
+                toml::to_string(&value_to_toml(&args[0], span)?)
+                    .map(Value::String)
+                    .map_err(|err| {
+                        IcooError::runtime(format!("toml.stringify() failed: {}", err), Some(span))
+                    })
+            }
+            ("toml", "parse") => {
+                expect_arity(&args, 1, span)?;
+                let text = expect_string(&args[0], span)?;
+                let parsed = toml::from_str::<toml::Value>(&text).map_err(|err| {
+                    IcooError::runtime(format!("toml.parse() failed: {}", err), Some(span))
+                })?;
+                toml_to_value(parsed, span)
+            }
             ("env", "cwd") => {
                 expect_arity(&args, 0, span)?;
                 std::env::current_dir()
@@ -2438,6 +2470,8 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
         ),
         "time" => matches!(name, "now_ms" | "now_sec"),
         "json" => matches!(name, "stringify" | "parse"),
+        "yaml" => matches!(name, "stringify" | "parse"),
+        "toml" => matches!(name, "stringify" | "parse"),
         "env" => matches!(name, "cwd" | "args" | "get" | "has"),
         "io" => matches!(name, "print"),
         "io.fs" => matches!(
@@ -2486,6 +2520,8 @@ fn importable_native_module_name(source: &str) -> Option<&'static str> {
         "std.math" => Some("std.math"),
         "std.time" => Some("std.time"),
         "std.json" => Some("std.json"),
+        "std.yaml" => Some("std.yaml"),
+        "std.toml" => Some("std.toml"),
         "std.env" => Some("std.env"),
         "std.io" => Some("std.io"),
         "std.io.fs" => Some("std.io.fs"),
@@ -2719,6 +2755,63 @@ fn json_to_value(value: serde_json::Value, span: Span) -> IcooResult<Value> {
             let mut result = HashMap::new();
             for (key, value) in values {
                 result.insert(key, json_to_value(value, span)?);
+            }
+            Ok(Value::Map(Rc::new(RefCell::new(result))))
+        }
+    }
+}
+
+fn value_to_toml(value: &Value, span: Span) -> IcooResult<toml::Value> {
+    match value {
+        Value::Bool(value) => Ok(toml::Value::Boolean(*value)),
+        Value::Int(value) => Ok(toml::Value::Integer(*value)),
+        Value::Float(value) if value.is_finite() => Ok(toml::Value::Float(*value)),
+        Value::Float(_) => Err(IcooError::runtime(
+            "Float value cannot be represented as TOML",
+            Some(span),
+        )),
+        Value::String(value) => Ok(toml::Value::String(value.clone())),
+        Value::Array(values) => values
+            .borrow()
+            .iter()
+            .map(|value| value_to_toml(value, span))
+            .collect::<IcooResult<Vec<_>>>()
+            .map(toml::Value::Array),
+        Value::Map(values) => {
+            let mut table = toml::map::Map::new();
+            let values_ref = values.borrow();
+            for (key, value) in values_ref.iter() {
+                table.insert(key.clone(), value_to_toml(value, span)?);
+            }
+            Ok(toml::Value::Table(table))
+        }
+        Value::Nil => Err(IcooError::runtime(
+            "Nil cannot be represented as TOML",
+            Some(span),
+        )),
+        _ => Err(IcooError::runtime(
+            format!("type '{}' cannot be represented as TOML", value.type_name()),
+            Some(span),
+        )),
+    }
+}
+
+fn toml_to_value(value: toml::Value, span: Span) -> IcooResult<Value> {
+    match value {
+        toml::Value::String(value) => Ok(Value::String(value)),
+        toml::Value::Integer(value) => Ok(Value::Int(value)),
+        toml::Value::Float(value) => Ok(Value::Float(value)),
+        toml::Value::Boolean(value) => Ok(Value::Bool(value)),
+        toml::Value::Datetime(value) => Ok(Value::String(value.to_string())),
+        toml::Value::Array(values) => values
+            .into_iter()
+            .map(|value| toml_to_value(value, span))
+            .collect::<IcooResult<Vec<_>>>()
+            .map(|values| Value::Array(Rc::new(RefCell::new(values)))),
+        toml::Value::Table(values) => {
+            let mut result = HashMap::new();
+            for (key, value) in values {
+                result.insert(key, toml_to_value(value, span)?);
             }
             Ok(Value::Map(Rc::new(RefCell::new(result))))
         }

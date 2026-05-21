@@ -13,4 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json = "1"
+serde_yml = "0.0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+toml = "0.8"

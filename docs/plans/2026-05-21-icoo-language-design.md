@@ -1302,6 +1302,8 @@ env.has(name: String) -> Bool
 import "std.io" as io
 import "std.io.fs" as fs
 import "std.os" as os
+import "std.yaml" as yaml
+import "std.toml" as toml
 import "std.net.http.client" as http_client
 import "std.net.http.server" as http_server
 ```
@@ -1343,6 +1345,24 @@ os.has_env(name: String) -> Bool
 ```
 
 `std.os` 第一版只提供读取进程和平台信息的能力，不提供 `set_env`、`exit`、进程启动等带强副作用的能力。后续可以在权限模型明确后再扩展。
+
+`std.yaml` 模块：
+
+```text
+yaml.stringify(value: Any) -> String
+yaml.parse(text: String) -> Any
+```
+
+`yaml.stringify` 支持 `Nil`、`Bool`、`Int`、`Float`、`String`、`Array`、`Map`。函数、类、实例、协程、任务和事件循环等运行时对象不参与 YAML 序列化。
+
+`std.toml` 模块：
+
+```text
+toml.stringify(value: Any) -> String
+toml.parse(text: String) -> Any
+```
+
+`toml.stringify` 支持 TOML 能表达的数据：`Bool`、`Int`、`Float`、`String`、`Array`、`Map`。TOML 没有 `Nil`，因此 `Nil` 或包含 `Nil` 的结构不能序列化为 TOML。TOML 的顶层更适合使用 `Map`，对应 TOML table。
 
 `std.net.http.client` 模块：
 
@@ -1709,6 +1729,8 @@ env
 import "std.io" as io
 import "std.io.fs" as fs
 import "std.os" as os
+import "std.yaml" as yaml
+import "std.toml" as toml
 ```
 
 标准库模块名不映射到本地文件路径，因此不会和 `./`、`../` 开头的用户模块路径冲突。

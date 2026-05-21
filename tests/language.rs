@@ -532,6 +532,74 @@ json.parse("{bad}")
 }
 
 #[test]
+fn supports_imported_yaml_and_toml_builtin_modules() {
+    let output = run(r#"
+import "std.yaml" as yaml
+import "std.toml" as toml
+
+let yaml_text = """
+name: Icoo
+items:
+  - 1
+  - 2
+active: true
+missing: null
+"""
+let yaml_data = yaml.parse(yaml_text)
+print(yaml_data.get("name"))
+print(yaml_data.get("items").at(1).to_string())
+print(yaml_data.get("active").to_string())
+print(yaml_data.get("missing").to_string())
+let yaml_map = {"name": "Icoo"}
+print(yaml.stringify(yaml_map).contains("name: Icoo").to_string())
+
+let toml_text = """
+name = "Icoo"
+items = [1, 2]
+active = true
+"""
+let toml_data = toml.parse(toml_text)
+print(toml_data.get("name"))
+print(toml_data.get("items").at(0).to_string())
+print(toml_data.get("active").to_string())
+let toml_map = {"name": "Icoo"}
+print(toml.stringify(toml_map).contains("name = \"Icoo\"").to_string())
+"#)
+    .unwrap();
+    assert_eq!(
+        output,
+        vec!["Icoo", "2", "true", "nil", "true", "Icoo", "1", "true", "true"]
+    );
+
+    let err = run(r#"
+yaml.parse("name: Icoo")
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'yaml'"));
+
+    let err = run(r#"
+import "std.yaml" as yaml
+yaml.parse(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.toml" as toml
+toml.parse("bad =")
+"#)
+    .unwrap_err();
+    assert!(err.contains("runtime error: toml.parse() failed"));
+
+    let err = run(r#"
+import "std.toml" as toml
+toml.stringify({"missing": nil})
+"#)
+    .unwrap_err();
+    assert!(err.contains("runtime error: Nil cannot be represented as TOML"));
+}
+
+#[test]
 fn supports_env_builtin_module() {
     let output = run(r#"
 print(env.cwd().contains("icoo_lang_r").to_string())
