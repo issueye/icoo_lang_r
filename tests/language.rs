@@ -550,10 +550,13 @@ env.get(1)
 }
 
 #[test]
-fn supports_fs_builtin_module() {
+fn supports_imported_io_fs_builtin_module() {
     let output = run(r#"
+import "std.io.fs" as fs
+
 let path = "target/icoo_fs_test.txt"
 fs.write_text(path, "hello fs")
+fs.append_text(path, " plus")
 print(fs.exists(path).to_string())
 print(fs.is_file(path).to_string())
 print(fs.is_dir("target").to_string())
@@ -561,15 +564,32 @@ print(fs.read_text(path))
 print(fs.list_dir("target").includes("icoo_fs_test.txt").to_string())
 "#)
     .unwrap();
-    assert_eq!(output, vec!["true", "true", "true", "hello fs", "true"]);
+    assert_eq!(
+        output,
+        vec!["true", "true", "true", "hello fs plus", "true"]
+    );
 
     let err = run(r#"
+fs.read_text("target/icoo_fs_test.txt")
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'fs'"));
+
+    let err = run(r#"
+import "std.fs" as fs
+"#)
+    .unwrap_err();
+    assert!(err.contains("module path must end with '.icoo'"));
+
+    let err = run(r#"
+import "std.io.fs" as fs
 fs.read_text(1)
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
 
     let err = run(r#"
+import "std.io.fs" as fs
 fs.write_text("target/icoo_fs_test.txt", 1)
 "#)
     .unwrap_err();
@@ -582,10 +602,7 @@ fn supports_imported_io_and_os_builtin_modules() {
 import "std.io" as io
 import "std.os" as os
 
-let path = "target/icoo_io_test.txt"
-io.write_text(path, "hello")
-io.append_text(path, " io")
-io.print(io.read_text(path))
+io.print("hello io")
 print(os.name().len() > 0)
 print(os.family().len() > 0)
 print(os.arch().len() > 0)
@@ -615,10 +632,10 @@ os.name()
 
     let err = run(r#"
 import "std.io" as io
-io.read_text(1)
+io.read_text("target/icoo_io_test.txt")
 "#)
     .unwrap_err();
-    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+    assert!(err.contains("type 'std.io' has no native method 'read_text'"));
 
     let err = run(r#"
 import "std.os" as os
@@ -792,15 +809,15 @@ client.get(1)
     let err = run_file(err_path).unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
 
-    let std_fs_path = dir.join("std_fs.icoo");
+    let std_io_fs_path = dir.join("std_io_fs.icoo");
     fs::write(
-        &std_fs_path,
+        &std_io_fs_path,
         r#"
-import "std.fs" as fs
+import "std.io.fs" as fs
 print(fs.exists("target").to_string())
 "#,
     )
     .unwrap();
-    let output = run_file(std_fs_path).unwrap();
+    let output = run_file(std_io_fs_path).unwrap();
     assert_eq!(output, vec!["true"]);
 }

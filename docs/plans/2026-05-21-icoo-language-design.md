@@ -1255,7 +1255,6 @@ math
 time
 json
 env
-fs
 ```
 
 `math` 模块：
@@ -1297,24 +1296,11 @@ env.has(name: String) -> Bool
 
 第一版 `env` 模块只提供读取能力，不提供 `set`。这是为了避免脚本在运行时修改进程级环境变量带来的隐式副作用。
 
-`fs` 模块：
-
-```text
-fs.exists(path: String) -> Bool
-fs.is_file(path: String) -> Bool
-fs.is_dir(path: String) -> Bool
-fs.read_text(path: String) -> String
-fs.write_text(path: String, content: String) -> Nil
-fs.list_dir(path: String) -> Array<String>
-```
-
-`fs.write_text` 会创建或覆盖目标文件。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
-
-后续新增内置库统一使用 `std.` 前缀作为标准库命名空间。已有的 `math`、`time`、`json`、`env`、`fs` 仍保留全局访问能力，也可以通过 `std.*` 导入后使用；新增内置库默认必须显式导入，不会注册为全局常量：
+后续新增内置库统一使用 `std.` 前缀作为标准库命名空间。已有的 `math`、`time`、`json`、`env` 仍保留全局访问能力，也可以通过 `std.*` 导入后使用；新增内置库默认必须显式导入，不会注册为全局常量：
 
 ```python
-import "std.fs" as fs
 import "std.io" as io
+import "std.io.fs" as fs
 import "std.os" as os
 import "std.net.http.client" as http_client
 import "std.net.http.server" as http_server
@@ -1324,12 +1310,23 @@ import "std.net.http.server" as http_server
 
 ```text
 io.print(value: Any) -> Nil
-io.read_text(path: String) -> String
-io.write_text(path: String, content: String) -> Nil
-io.append_text(path: String, content: String) -> Nil
 ```
 
-`io.print` 使用当前解释器输出通道，语义与全局 `print` 一致。`read_text`、`write_text`、`append_text` 是文本 I/O 的第一版能力；二进制流、标准输入和异步 I/O 后续再设计。
+`io.print` 使用当前解释器输出通道，语义与全局 `print` 一致。标准输入、二进制流和异步 I/O 后续再设计。
+
+`std.io.fs` 模块：
+
+```text
+fs.exists(path: String) -> Bool
+fs.is_file(path: String) -> Bool
+fs.is_dir(path: String) -> Bool
+fs.read_text(path: String) -> String
+fs.write_text(path: String, content: String) -> Nil
+fs.append_text(path: String, content: String) -> Nil
+fs.list_dir(path: String) -> Array<String>
+```
+
+`fs.write_text` 会创建或覆盖目标文件，`fs.append_text` 会在文件末尾追加文本并在文件不存在时创建。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
 
 `std.os` 模块：
 
@@ -1414,7 +1411,7 @@ task.cancel()
 - `import` 只能在顶层使用，便于加载器提前构建依赖图。
 - 同一个模块文件在一次运行中只执行一次，后续导入复用缓存。
 - 导入路径第一版只支持本地文件路径。
-- 内置模块 `math`、`time`、`json`、`env`、`fs` 继续作为全局常量存在；用户模块系统先不强制通过 `import` 使用标准库。
+- 历史内置模块 `math`、`time`、`json`、`env` 继续作为全局常量存在；新增标准库通过 `std.` 命名空间导入。
 
 ### 16.2 语法设计
 
@@ -1702,7 +1699,6 @@ math
 time
 json
 env
-fs
 ```
 
 用户模块系统不替代内置模块，而是补充本地文件拆分能力。历史内置模块保持全局可用；新增内置库使用 `std.` 命名空间，通过字符串模块名导入。
@@ -1710,8 +1706,8 @@ fs
 当前已经支持标准库导入：
 
 ```python
-import "std.fs" as fs
 import "std.io" as io
+import "std.io.fs" as fs
 import "std.os" as os
 ```
 
@@ -1942,4 +1938,4 @@ ADR：默认使用 Tokio 作为事件循环后端。
 - 模块路径第一版是否完全禁止绝对路径，还是允许 CLI 参数开启？
 - `export let` 导出的可变绑定是导出最终值快照，还是后续需要 live binding？
 - 模块顶层运行时错误是否缓存为 Failed 状态，还是允许下一次 import 重试？
-- 标准库后续是否迁移到 `import "std/fs"` 形式，还是长期保持全局内置模块？
+- 是否需要为 `std.io.fs` 增加权限模型、沙箱根目录和二进制 I/O？

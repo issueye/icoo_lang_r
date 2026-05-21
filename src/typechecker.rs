@@ -877,8 +877,8 @@ fn import_module_type(source: &str) -> TypeInfo {
         "std.time" => TypeInfo::known("Time"),
         "std.json" => TypeInfo::known("Json"),
         "std.env" => TypeInfo::known("Env"),
-        "std.fs" => TypeInfo::known("Fs"),
         "std.io" => TypeInfo::known("Io"),
+        "std.io.fs" => TypeInfo::known("IoFs"),
         "std.os" => TypeInfo::known("Os"),
         "std.net.http.client" => TypeInfo::known("NetHttpClient"),
         "std.net.http.server" => TypeInfo::known("NetHttpServer"),
@@ -901,7 +901,6 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("time", "Time"),
         ("json", "Json"),
         ("env", "Env"),
-        ("fs", "Fs"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -965,12 +964,11 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Env", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Env", "get") => Some(TypeInfo::Unknown),
         ("Env", "has") => Some(TypeInfo::known("Bool")),
-        ("Fs", "exists" | "is_file" | "is_dir") => Some(TypeInfo::known("Bool")),
-        ("Fs", "read_text") => Some(TypeInfo::known("String")),
-        ("Fs", "write_text") => Some(TypeInfo::known("Nil")),
-        ("Fs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
-        ("Io", "print" | "write_text" | "append_text") => Some(TypeInfo::known("Nil")),
-        ("Io", "read_text") => Some(TypeInfo::known("String")),
+        ("Io", "print") => Some(TypeInfo::known("Nil")),
+        ("IoFs", "exists" | "is_file" | "is_dir") => Some(TypeInfo::known("Bool")),
+        ("IoFs", "read_text") => Some(TypeInfo::known("String")),
+        ("IoFs", "write_text" | "append_text") => Some(TypeInfo::known("Nil")),
+        ("IoFs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "name" | "family" | "arch" | "cwd") => Some(TypeInfo::known("String")),
         ("Os", "pid") => Some(TypeInfo::known("Int")),
         ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
@@ -1117,31 +1115,19 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("Fs", "exists" | "is_file" | "is_dir" | "read_text" | "list_dir") => Some(native_sig(
-            NativeArity::Exact(1),
-            vec![Some("String")],
-            None,
-            return_type,
-        )),
-        ("Fs", "write_text") => Some(native_sig(
-            NativeArity::Exact(2),
-            vec![Some("String"), Some("String")],
-            None,
-            return_type,
-        )),
         ("Io", "print") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Any")],
             None,
             return_type,
         )),
-        ("Io", "read_text") => Some(native_sig(
+        ("IoFs", "exists" | "is_file" | "is_dir" | "read_text" | "list_dir") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("String")],
             None,
             return_type,
         )),
-        ("Io", "write_text" | "append_text") => Some(native_sig(
+        ("IoFs", "write_text" | "append_text") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
             None,
