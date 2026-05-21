@@ -1082,6 +1082,8 @@ impl Interpreter {
                     | "backend_name"
                     | "worker_threads"
             ),
+            Value::WebInoApp(_) => matches!(name, "get" | "post" | "listen_once"),
+            Value::WebInoResponse(_) => matches!(name, "status" | "send" | "json"),
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
             Value::Bool(_) => matches!(name, "to_int"),
             Value::Int(_) => matches!(name, "to_float" | "abs"),
@@ -1369,6 +1371,12 @@ impl Interpreter {
                 http_server_serve_once(&host, port as u16, &body, span)?;
                 Ok(Value::Nil)
             }
+            ("web.ino", "App") | ("web.ino", "create") => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::WebInoApp(Rc::new(RefCell::new(WebInoApp {
+                    routes: Vec::new(),
+                }))))
+            }
             _ => Err(IcooError::runtime(
                 format!(
                     "unknown native module method '{}.{}'",
@@ -1397,6 +1405,10 @@ impl Interpreter {
             Value::Map(values) => self.map_method(values.clone(), &method.name, args, span),
             Value::EventLoop(loop_ref) => {
                 self.event_loop_method(loop_ref.clone(), &method.name, args, span)
+            }
+            Value::WebInoApp(app) => self.web_ino_app_method(app.clone(), &method.name, args, span),
+            Value::WebInoResponse(response) => {
+                self.web_ino_response_method(response.clone(), &method.name, args, span)
             }
             Value::Task(task) => self.task_method(task.clone(), &method.name, args, span),
             Value::Bool(value) if method.name == "to_int" => {
@@ -1428,6 +1440,169 @@ impl Interpreter {
                 Some(span),
             )),
         }
+    }
+
+    fn web_ino_app_method(
+        &mut self,
+        app: Rc<RefCell<WebInoApp>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "get" | "post" => {
+                expect_arity(&args, 2, span)?;
+                let path = expect_string(&args[0], span)?;
+                if !path.starts_with('/') {
+                    return Err(IcooError::runtime(
+                        "route path must start with '/'",
+                        Some(span),
+                    ));
+                }
+                if !is_callable(&args[1]) {
+                    return Err(IcooError::runtime(
+                        "route handler must be callable",
+                        Some(span),
+                    ));
+                }
+                app.borrow_mut().routes.push(WebInoRoute {
+                    method: name.to_ascii_uppercase(),
+                    path,
+                    handler: args[1].clone(),
+                });
+                Ok(Value::WebInoApp(app))
+            }
+            "listen_once" => {
+                expect_arity(&args, 2, span)?;
+                let host = expect_string(&args[0], span)?;
+                let port = expect_int(&args[1], span)?;
+                if !(1..=65535).contains(&port) {
+                    return Err(IcooError::runtime(
+                        "server port must be between 1 and 65535",
+                        Some(span),
+                    ));
+                }
+                self.web_ino_listen_once(app, &host, port as u16, span)?;
+                Ok(Value::Nil)
+            }
+            _ => Err(IcooError::runtime("unknown WebInoApp method", Some(span))),
+        }
+    }
+
+    fn web_ino_response_method(
+        &mut self,
+        response: Rc<RefCell<WebInoResponse>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "status" => {
+                expect_arity(&args, 1, span)?;
+                let status = expect_int(&args[0], span)?;
+                if !(100..=999).contains(&status) {
+                    return Err(IcooError::runtime(
+                        "HTTP status must be between 100 and 999",
+                        Some(span),
+                    ));
+                }
+                response.borrow_mut().status = status;
+                Ok(Value::WebInoResponse(response))
+            }
+            "send" => {
+                expect_arity(&args, 1, span)?;
+                let mut response_ref = response.borrow_mut();
+                response_ref.body = args[0].display();
+                response_ref.content_type = "text/plain; charset=utf-8".to_string();
+                response_ref.sent = true;
+                Ok(Value::Nil)
+            }
+            "json" => {
+                expect_arity(&args, 1, span)?;
+                let body =
+                    serde_json::to_string(&value_to_json(&args[0], span)?).map_err(|err| {
+                        IcooError::runtime(
+                            format!("web response json() failed: {}", err),
+                            Some(span),
+                        )
+                    })?;
+                let mut response_ref = response.borrow_mut();
+                response_ref.body = body;
+                response_ref.content_type = "application/json; charset=utf-8".to_string();
+                response_ref.sent = true;
+                Ok(Value::Nil)
+            }
+            _ => Err(IcooError::runtime(
+                "unknown WebInoResponse method",
+                Some(span),
+            )),
+        }
+    }
+
+    fn web_ino_listen_once(
+        &mut self,
+        app: Rc<RefCell<WebInoApp>>,
+        host: &str,
+        port: u16,
+        span: Span,
+    ) -> IcooResult<()> {
+        let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino listen_once bind failed: {}", err),
+                Some(span),
+            )
+        })?;
+        let (mut stream, _) = listener.accept().map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino listen_once accept failed: {}", err),
+                Some(span),
+            )
+        })?;
+        let mut buffer = [0_u8; 8192];
+        let size = std::io::Read::read(&mut stream, &mut buffer).map_err(|err| {
+            IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
+        })?;
+        let request_text = String::from_utf8_lossy(&buffer[..size]).into_owned();
+        let request = parse_web_ino_request(&request_text, span)?;
+        let route = app
+            .borrow()
+            .routes
+            .iter()
+            .find(|route| route.method == request.method && route.path == request.path)
+            .cloned();
+        let response = Rc::new(RefCell::new(WebInoResponse {
+            status: 200,
+            body: String::new(),
+            content_type: "text/plain; charset=utf-8".to_string(),
+            sent: false,
+        }));
+        if let Some(route) = route {
+            let result = self.call_value(
+                route.handler,
+                vec![
+                    web_ino_request_value(&request),
+                    Value::WebInoResponse(response.clone()),
+                ],
+                span,
+            )?;
+            if !response.borrow().sent && !matches!(result, Value::Nil) {
+                let mut response_ref = response.borrow_mut();
+                response_ref.body = result.display();
+                response_ref.sent = true;
+            }
+        } else {
+            let mut response_ref = response.borrow_mut();
+            response_ref.status = 404;
+            response_ref.body = "Not Found".to_string();
+            response_ref.sent = true;
+        }
+        let response_text = web_ino_http_response(&response.borrow());
+        std::io::Write::write_all(&mut stream, response_text.as_bytes()).map_err(|err| {
+            IcooError::runtime(
+                format!("web.ino response write failed: {}", err),
+                Some(span),
+            )
+        })
     }
 
     fn event_loop_method(
@@ -2308,8 +2483,20 @@ fn value_matches_type(value: &Value, type_name: &str) -> bool {
         "Coroutine" => matches!(value, Value::Coroutine(_)),
         "Task" => matches!(value, Value::Task(_)),
         "EventLoop" => matches!(value, Value::EventLoop(_)),
+        "WebInoApp" => matches!(value, Value::WebInoApp(_)),
+        "WebInoResponse" => matches!(value, Value::WebInoResponse(_)),
         class_name => matches_instance_type(value, class_name),
     }
+}
+
+fn is_callable(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Function(_)
+            | Value::NativeFunction(_)
+            | Value::NativeMethod(_)
+            | Value::NativeModuleMethod(_)
+    )
 }
 
 fn matches_instance_type(value: &Value, class_name: &str) -> bool {
@@ -2390,6 +2577,8 @@ fn value_equal(left: &Value, right: &Value) -> bool {
         (Value::Coroutine(a), Value::Coroutine(b)) => Rc::ptr_eq(a, b),
         (Value::Task(a), Value::Task(b)) => Rc::ptr_eq(a, b),
         (Value::EventLoop(a), Value::EventLoop(b)) => Rc::ptr_eq(a, b),
+        (Value::WebInoApp(a), Value::WebInoApp(b)) => Rc::ptr_eq(a, b),
+        (Value::WebInoResponse(a), Value::WebInoResponse(b)) => Rc::ptr_eq(a, b),
         (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
         (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(a, b),
         _ => false,
@@ -2498,6 +2687,7 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
         ),
         "net.http.client" => matches!(name, "get" | "post"),
         "net.http.server" => matches!(name, "serve_once"),
+        "web.ino" => matches!(name, "App" | "create"),
         _ => false,
     }
 }
@@ -2528,6 +2718,7 @@ fn importable_native_module_name(source: &str) -> Option<&'static str> {
         "std.os" => Some("std.os"),
         "std.net.http.client" => Some("std.net.http.client"),
         "std.net.http.server" => Some("std.net.http.server"),
+        "std.web.ino" => Some("std.web.ino"),
         _ => None,
     }
 }
@@ -2695,6 +2886,91 @@ fn http_server_serve_once(host: &str, port: u16, body: &str, span: Span) -> Icoo
     );
     std::io::Write::write_all(&mut stream, response.as_bytes())
         .map_err(|err| IcooError::runtime(format!("http server write failed: {}", err), Some(span)))
+}
+
+#[derive(Debug)]
+struct ParsedWebInoRequest {
+    method: String,
+    path: String,
+    query: String,
+    headers: HashMap<String, Value>,
+    body: String,
+}
+
+fn parse_web_ino_request(request: &str, span: Span) -> IcooResult<ParsedWebInoRequest> {
+    let (head, body) = request.split_once("\r\n\r\n").unwrap_or((request, ""));
+    let mut lines = head.lines();
+    let request_line = lines.next().ok_or_else(|| {
+        IcooError::runtime("invalid HTTP request: missing request line", Some(span))
+    })?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| IcooError::runtime("invalid HTTP request method", Some(span)))?
+        .to_ascii_uppercase();
+    let target = parts
+        .next()
+        .ok_or_else(|| IcooError::runtime("invalid HTTP request path", Some(span)))?;
+    let (path, query) = target
+        .split_once('?')
+        .map(|(path, query)| (path.to_string(), query.to_string()))
+        .unwrap_or((target.to_string(), String::new()));
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(
+                name.trim().to_ascii_lowercase(),
+                Value::String(value.trim().to_string()),
+            );
+        }
+    }
+    Ok(ParsedWebInoRequest {
+        method,
+        path,
+        query,
+        headers,
+        body: body.to_string(),
+    })
+}
+
+fn web_ino_request_value(request: &ParsedWebInoRequest) -> Value {
+    let mut map = HashMap::new();
+    map.insert("method".to_string(), Value::String(request.method.clone()));
+    map.insert("path".to_string(), Value::String(request.path.clone()));
+    map.insert("query".to_string(), Value::String(request.query.clone()));
+    map.insert(
+        "headers".to_string(),
+        Value::Map(Rc::new(RefCell::new(request.headers.clone()))),
+    );
+    map.insert("body".to_string(), Value::String(request.body.clone()));
+    Value::Map(Rc::new(RefCell::new(map)))
+}
+
+fn web_ino_http_response(response: &WebInoResponse) -> String {
+    let body = response.body.clone();
+    let status_text = http_status_text(response.status);
+    format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n{}",
+        response.status,
+        status_text,
+        body.as_bytes().len(),
+        response.content_type,
+        body
+    )
+}
+
+fn http_status_text(status: i64) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    }
 }
 
 fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json::Value> {

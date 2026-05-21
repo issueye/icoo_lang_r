@@ -884,6 +884,7 @@ fn import_module_type(source: &str) -> TypeInfo {
         "std.os" => TypeInfo::known("Os"),
         "std.net.http.client" => TypeInfo::known("NetHttpClient"),
         "std.net.http.server" => TypeInfo::known("NetHttpServer"),
+        "std.web.ino" => TypeInfo::known("WebIno"),
         _ => TypeInfo::known("Module"),
     }
 }
@@ -985,6 +986,11 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
             TypeInfo::known("Any"),
         )),
         ("NetHttpServer", "serve_once") => Some(TypeInfo::known("Nil")),
+        ("WebIno", "App" | "create") => Some(TypeInfo::known("WebInoApp")),
+        ("WebInoApp", "get" | "post") => Some(TypeInfo::known("WebInoApp")),
+        ("WebInoApp", "listen_once") => Some(TypeInfo::known("Nil")),
+        ("WebInoResponse", "status") => Some(TypeInfo::known("WebInoResponse")),
+        ("WebInoResponse", "send" | "json") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1160,6 +1166,33 @@ fn native_method_sig(
         ("NetHttpServer", "serve_once") => Some(native_sig(
             NativeArity::Exact(3),
             vec![Some("String"), Some("Int"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("WebIno", "App" | "create") => {
+            Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
+        }
+        ("WebInoApp", "get" | "post") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("Function")],
+            None,
+            return_type,
+        )),
+        ("WebInoApp", "listen_once") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("Int")],
+            None,
+            return_type,
+        )),
+        ("WebInoResponse", "status") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Int")],
+            None,
+            return_type,
+        )),
+        ("WebInoResponse", "send" | "json") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Any")],
             None,
             return_type,
         )),

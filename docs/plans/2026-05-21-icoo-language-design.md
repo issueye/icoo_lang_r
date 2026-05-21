@@ -1306,6 +1306,7 @@ import "std.yaml" as yaml
 import "std.toml" as toml
 import "std.net.http.client" as http_client
 import "std.net.http.server" as http_server
+import "std.web.ino" as ino
 ```
 
 `std.io` 模块：
@@ -1388,6 +1389,31 @@ http_server.serve_once(host: String, port: Int, body: String) -> Nil
 ```
 
 `serve_once` 是阻塞调用，只接收一个 HTTP 请求并返回 `200 OK`。这是网络服务器能力的 MVP，用于验证导入式内置库、TCP 监听和 HTTP 响应流程；后续再设计长生命周期 server、路由、请求对象、并发处理和 async I/O。
+
+`std.web.ino` 模块：
+
+```text
+ino.App() -> WebInoApp
+ino.create() -> WebInoApp
+
+app.get(path: String, handler: Function) -> WebInoApp
+app.post(path: String, handler: Function) -> WebInoApp
+app.listen_once(host: String, port: Int) -> Nil
+
+res.status(code: Int) -> WebInoResponse
+res.send(value: Any) -> Nil
+res.json(value: Any) -> Nil
+```
+
+`std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。第一版使用精确路径匹配，handler 接收两个参数：
+
+```python
+fn home(req: Map<String, Any>, res: WebInoResponse):
+    res.status(200)
+    res.send("hello " + req.get("path"))
+```
+
+`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`。`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证；后续可以扩展为长生命周期 `listen`、中间件、路径参数、路由组、错误处理和 async handler。
 
 事件循环对象方法：
 
@@ -1731,6 +1757,7 @@ import "std.io.fs" as fs
 import "std.os" as os
 import "std.yaml" as yaml
 import "std.toml" as toml
+import "std.web.ino" as ino
 ```
 
 标准库模块名不映射到本地文件路径，因此不会和 `./`、`../` 开头的用户模块路径冲突。

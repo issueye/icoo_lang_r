@@ -26,6 +26,8 @@ pub enum Value {
     Coroutine(Rc<RefCell<IcooCoroutine>>),
     Task(Rc<RefCell<IcooTask>>),
     EventLoop(Rc<RefCell<IcooEventLoop>>),
+    WebInoApp(Rc<RefCell<WebInoApp>>),
+    WebInoResponse(Rc<RefCell<WebInoResponse>>),
     Class(Rc<IcooClass>),
     Instance(Rc<RefCell<Instance>>),
 }
@@ -63,6 +65,8 @@ impl Value {
             Value::Coroutine(_) => "Coroutine".to_string(),
             Value::Task(_) => "Task".to_string(),
             Value::EventLoop(_) => "EventLoop".to_string(),
+            Value::WebInoApp(_) => "WebInoApp".to_string(),
+            Value::WebInoResponse(_) => "WebInoResponse".to_string(),
             Value::Class(class) => class.name.clone(),
             Value::Instance(instance) => instance.borrow().class.name.clone(),
         }
@@ -107,6 +111,10 @@ impl Value {
             Value::EventLoop(loop_ref) => {
                 let loop_ref = loop_ref.borrow();
                 format!("<event_loop {}>", loop_ref.backend.name())
+            }
+            Value::WebInoApp(_) => "<web_ino_app>".to_string(),
+            Value::WebInoResponse(response) => {
+                format!("<web_ino_response {}>", response.borrow().status)
             }
             Value::Class(class) => format!("<class {}>", class.name),
             Value::Instance(instance) => format!("<{} instance>", instance.borrow().class.name),
@@ -366,6 +374,26 @@ impl fmt::Debug for NativeModuleMethod {
 pub struct IcooModule {
     pub path: PathBuf,
     pub exports: HashMap<String, Value>,
+}
+
+#[derive(Debug)]
+pub struct WebInoApp {
+    pub routes: Vec<WebInoRoute>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebInoRoute {
+    pub method: String,
+    pub path: String,
+    pub handler: Value,
+}
+
+#[derive(Debug)]
+pub struct WebInoResponse {
+    pub status: i64,
+    pub body: String,
+    pub content_type: String,
+    pub sent: bool,
 }
 
 #[derive(Clone)]

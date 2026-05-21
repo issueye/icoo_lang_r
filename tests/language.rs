@@ -889,3 +889,65 @@ print(fs.exists("target").to_string())
     let output = run_file(std_io_fs_path).unwrap();
     assert_eq!(output, vec!["true"]);
 }
+
+#[test]
+fn supports_std_web_ino_express_style_server() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn home(req: Map<String, Any>, res: WebInoResponse):
+    res.status(201)
+    res.send("hello " + req.get("path"))
+
+app.get("/hello", home)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_path = dir.join("client.icoo");
+    fs::write(
+        &client_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+let response = client.get("http://127.0.0.1:{}/hello")
+print(response.get("status").to_string())
+print(response.get("body"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let output = run_file(client_path).unwrap();
+    assert_eq!(output, vec!["201", "hello /hello"]);
+    server_handle.join().unwrap().unwrap();
+
+    let err = run(r#"
+web.ino.App()
+"#)
+    .unwrap_err();
+    assert!(err.contains("undefined variable 'web'"));
+
+    let err = run(r#"
+import "std.web.ino" as ino
+let app = ino.App()
+app.get("/", 1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected Function for argument 2 but got Int"));
+}
