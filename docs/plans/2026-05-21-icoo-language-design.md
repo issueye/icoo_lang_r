@@ -26,11 +26,11 @@ Icoo 是一个使用 Rust 实现的小型脚本语言。语法风格接近 Pytho
 第一版不做：
 
 - 多继承。
-- 泛型。
 - 完整异步 I/O 运行时。
 - 装饰器。
 - 完整静态类型系统。
-- 复杂模块系统。
+- 包管理器和第三方依赖解析。
+- 跨包复杂模块系统。
 
 ## 2. 语言示例
 
@@ -1340,7 +1340,342 @@ task.cancel()
 
 如果同时提供全局函数和方法，方法是主要风格，全局函数是便利入口。
 
-## 16. 实现阶段
+## 16. 模块系统设计
+
+模块系统目标是让 Icoo 可以把较大的脚本拆成多个文件，同时保持当前语言的简单性、显式性和可静态检查性。第一版模块系统只解决“本地文件模块 + 显式导出 + 显式导入”，不引入包管理器、远程依赖、自动搜索路径或顶层异步初始化。
+
+### 16.1 设计目标
+
+- 每个 `.icoo` 文件都是一个模块。
+- 模块拥有独立顶层作用域，顶层变量默认私有。
+- 只有 `export` 声明的绑定可以被其他模块访问。
+- `import` 只能在顶层使用，便于加载器提前构建依赖图。
+- 同一个模块文件在一次运行中只执行一次，后续导入复用缓存。
+- 导入路径第一版只支持本地文件路径。
+- 内置模块 `math`、`time`、`json`、`env`、`fs` 继续作为全局常量存在；用户模块系统先不强制通过 `import` 使用标准库。
+
+### 16.2 语法设计
+
+导出声明：
+
+```python
+export const VERSION: String = "1.0.0"
+
+export fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+export class User:
+    let name: String
+
+    fn init(self, name: String):
+        self.name = name
+```
+
+命名空间导入：
+
+```python
+import "./math_extra.icoo" as math_extra
+
+print(math_extra.add(1, 2).to_string())
+```
+
+按名称导入：
+
+```python
+from "./math_extra.icoo" import add, VERSION
+from "./models/user.icoo" import User as AppUser
+
+print(add(1, 2).to_string())
+let user = AppUser("Tom")
+```
+
+第一版不支持：
+
+- `import *`
+- 隐式目录模块。
+- 包名导入，例如 `import http`。
+- 顶层 `await`。
+- 动态导入，例如 `import(path)`。
+- 重新导出，例如 `export from "./a.icoo"`。
+
+### 16.3 路径规则
+
+导入源必须是字符串字面量。
+
+```python
+import "./utils.icoo" as utils
+from "../shared/types.icoo" import User
+```
+
+路径解析规则：
+
+- 以 `./` 或 `../` 开头的路径按当前模块所在目录解析。
+- 绝对路径第一版可以拒绝，避免脚本意外依赖机器本地路径。
+- 文件扩展名第一版要求显式写出 `.icoo`。
+- 解析后使用规范化绝对路径作为模块缓存 key。
+- 入口脚本的当前模块目录就是入口文件所在目录。
+
+错误示例：
+
+```text
+import "utils" as utils      # 第一版不支持包名搜索
+import "./utils" as utils    # 第一版要求显式 .icoo
+```
+
+### 16.4 运行时模型
+
+新增运行时值：
+
+```rust
+Value::Module(Rc<IcooModule>)
+
+pub struct IcooModule {
+    pub path: PathBuf,
+    pub exports: HashMap<String, Value>,
+}
+```
+
+模块加载状态：
+
+```rust
+enum ModuleState {
+    Loading,
+    Loaded(Rc<IcooModule>),
+    Failed(String),
+}
+```
+
+加载流程：
+
+```mermaid
+flowchart TD
+    A["入口文件"] --> B["解析 AST"]
+    B --> C["收集 import/export"]
+    C --> D["递归加载依赖"]
+    D --> E["类型检查模块图"]
+    E --> F["执行模块顶层代码"]
+    F --> G["收集 export 绑定"]
+    G --> H["缓存 Module"]
+```
+
+模块执行规则：
+
+- 每个模块创建独立 `Environment`。
+- 模块环境预装全局内置函数和内置模块。
+- `import "./x.icoo" as x` 在当前模块环境中定义一个只读绑定 `x`，值为 `Value::Module`。
+- `from "./x.icoo" import add` 在当前模块环境中定义一个只读绑定 `add`，值来自目标模块的导出表。
+- `export` 不改变声明本身的运行语义，只把声明名登记到模块导出表。
+- 模块执行完成后，从模块环境中读取导出名，构造 `IcooModule.exports`。
+
+模块对象访问：
+
+```python
+import "./config.icoo" as config
+print(config.VERSION)
+```
+
+运行时上，`config.VERSION` 等价于读取模块导出表中的 `VERSION`。如果导出不存在，报错：
+
+```text
+module './config.icoo' has no export 'VERSION'
+```
+
+### 16.5 循环依赖策略
+
+第一版直接拒绝循环依赖。
+
+原因：
+
+- 当前解释器是 AST 解释器，顶层执行会产生副作用。
+- 当前绑定模型还没有 JavaScript 那种 live binding。
+- 拒绝循环依赖更容易给出清晰错误，也更符合脚本语言 MVP 的实现成本。
+
+示例：
+
+```text
+a.icoo imports b.icoo
+b.icoo imports a.icoo
+```
+
+报错：
+
+```text
+module cycle detected: a.icoo -> b.icoo -> a.icoo
+```
+
+后续如果需要支持循环依赖，应升级为“两阶段模块初始化”：
+
+- 先创建模块记录和导出槽位。
+- 再执行模块顶层初始化。
+- 导入方读取 live binding。
+- 读取未初始化导出时报错。
+
+### 16.6 静态检查设计
+
+类型检查器需要从单文件检查升级为模块图检查。
+
+新增结构：
+
+```rust
+pub struct ModuleInfo {
+    pub path: PathBuf,
+    pub exports: HashMap<String, TypeInfo>,
+}
+
+enum TypeInfo {
+    // ...
+    Module(ModuleId),
+}
+```
+
+检查流程：
+
+1. 加载器解析入口模块。
+2. 递归解析所有静态导入。
+3. 每个模块先收集本模块的函数、类和导出声明签名。
+4. 构建 `ModuleInfo`。
+5. 类型检查每个模块体。
+6. 检查 `from import` 的名称是否存在。
+7. 检查 `module.export_name` 的属性访问是否存在，并返回导出类型。
+
+示例：
+
+```python
+# math_extra.icoo
+export fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+# main.icoo
+import "./math_extra.icoo" as math_extra
+let value: String = math_extra.add(1, 2)
+```
+
+静态错误：
+
+```text
+type error: expected String for binding 'value' but got Int
+```
+
+### 16.7 Parser 与 AST 变化
+
+新增关键字：
+
+```text
+import
+from
+export
+as
+```
+
+建议 AST：
+
+```rust
+pub enum Stmt {
+    ImportModule {
+        source: String,
+        alias: Identifier,
+        span: Span,
+    },
+    ImportNames {
+        source: String,
+        items: Vec<ImportItem>,
+        span: Span,
+    },
+    ExportDecl(Box<Stmt>),
+    // ...
+}
+
+pub struct ImportItem {
+    pub name: Identifier,
+    pub alias: Option<Identifier>,
+}
+```
+
+约束：
+
+- `ImportModule`、`ImportNames`、`ExportDecl` 只能出现在模块顶层。
+- `export` 后只允许 `const`、`final`、`let`、`fn`、`async fn`、`class`。
+- 第一版不支持 `export expression`。
+
+### 16.8 Resolver 规则
+
+Resolver 新增检查：
+
+- `import` 只能在顶层。
+- `export` 只能在顶层。
+- 同一模块不能重复导出同名绑定。
+- `from import` 引入的本地名称不能与当前作用域已有名称冲突。
+- 导入别名按普通变量名处理。
+- `import "./x.icoo" as x` 的 `x` 是只读绑定。
+
+### 16.9 错误模型
+
+模块错误应带上导入链，便于定位。
+
+```text
+main.icoo:1:1: module load error: failed to load './a.icoo'
+import chain:
+  main.icoo
+  a.icoo
+  b.icoo
+reason: module cycle detected: a.icoo -> b.icoo -> a.icoo
+```
+
+常见错误：
+
+- 文件不存在。
+- 路径不是 `.icoo` 文件。
+- 导入不是字符串字面量。
+- 导出名不存在。
+- 重复导出。
+- 循环依赖。
+- 模块顶层运行时错误。
+
+### 16.10 与内置模块的关系
+
+当前内置模块已经以 `Value::NativeModule` 注册在全局环境中：
+
+```text
+math
+time
+json
+env
+fs
+```
+
+用户模块系统不替代内置模块，而是补充本地文件拆分能力。第一版保持内置模块全局可用，避免在还没有包解析器之前引入 `import "std/fs"` 这类语法。
+
+后续可以增加标准库导入别名：
+
+```python
+import "std/fs" as fs
+```
+
+但这需要先定义标准库路径、包名解析和冲突规则，不放入模块系统 MVP。
+
+### 16.11 架构决策记录
+
+ADR：第一版模块系统使用显式导出和静态本地导入。
+
+状态：建议采纳。
+
+决策：
+
+- 使用 `export` 明确公开 API。
+- 使用字符串路径导入本地 `.icoo` 文件。
+- 默认私有顶层绑定。
+- 模块缓存按规范化绝对路径索引。
+- 第一版拒绝循环依赖。
+
+取舍：
+
+- 优点：实现简单、错误清晰、利于静态检查。
+- 优点：不会把所有顶层定义暴露给外部，模块边界更干净。
+- 缺点：不支持动态插件加载。
+- 缺点：不支持包管理和第三方依赖。
+- 缺点：循环依赖需要用户重构公共代码到第三个模块。
+
+## 17. 实现阶段
 
 阶段 1：Lexer
 
@@ -1457,7 +1792,23 @@ task.cancel()
 - 方法名必须使用 snake_case。
 - 输出带源码位置的 `ResolveError`。
 
-## 17. 架构决策
+阶段 10：模块系统 MVP
+
+- Lexer 增加 `import`、`from`、`export`、`as` 关键字。
+- Parser 增加 `ImportModule`、`ImportNames`、`ExportDecl`。
+- Resolver 校验 `import` 和 `export` 只能在顶层。
+- 设计 `ModuleLoader`，以入口文件为根加载模块图。
+- 模块路径按当前模块目录解析，第一版只允许相对 `.icoo` 文件。
+- 以规范化绝对路径作为模块缓存 key。
+- 实现 `Value::Module` 和 `IcooModule.exports`。
+- 类型检查器增加 `ModuleInfo` 和 `TypeInfo::Module`。
+- 支持 `import "./a.icoo" as a`。
+- 支持 `from "./a.icoo" import name, name as alias`。
+- 支持声明级 `export`。
+- 检测并拒绝循环依赖。
+- CLI 从单文件执行切换为入口模块执行。
+
+## 18. 架构决策
 
 决策：第一版使用 AST 解释器。
 
@@ -1508,7 +1859,7 @@ ADR：默认使用 Tokio 作为事件循环后端。
 - 运行时对象不能继续无条件使用 `Rc<RefCell<...>>` 跨任务共享；多线程路径需要 `Arc`、锁、不可变共享或任务隔离。
 - 后续增加真实异步 I/O 时，可以直接接入 Tokio 的文件、网络、定时器能力。
 
-## 18. 待确认问题
+## 19. 待确认问题
 
 实现前或第一轮实现过程中需要确认：
 
@@ -1524,3 +1875,7 @@ ADR：默认使用 Tokio 作为事件循环后端。
 - 后续是否需要全局默认事件循环，还是所有协程都必须显式绑定到 `EventLoop`？
 - `EventLoop()` 默认 worker 线程数量是否使用 CPU 核心数，还是允许 `EventLoop(workers: 4)` 显式配置？
 - 用户类是否需要显式声明为可跨线程共享，还是第一版全部 `Instance` 都限制为任务本地对象？
+- 模块路径第一版是否完全禁止绝对路径，还是允许 CLI 参数开启？
+- `export let` 导出的可变绑定是导出最终值快照，还是后续需要 live binding？
+- 模块顶层运行时错误是否缓存为 Failed 状态，还是允许下一次 import 重试？
+- 标准库后续是否迁移到 `import "std/fs"` 形式，还是长期保持全局内置模块？
