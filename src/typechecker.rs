@@ -873,8 +873,13 @@ fn common_type(left: &TypeInfo, right: &TypeInfo) -> TypeInfo {
 
 fn import_module_type(source: &str) -> TypeInfo {
     match source {
-        "net.http.client" => TypeInfo::known("NetHttpClient"),
-        "net.http.server" => TypeInfo::known("NetHttpServer"),
+        "std.math" => TypeInfo::known("Math"),
+        "std.time" => TypeInfo::known("Time"),
+        "std.json" => TypeInfo::known("Json"),
+        "std.env" => TypeInfo::known("Env"),
+        "std.fs" => TypeInfo::known("Fs"),
+        "std.net.http.client" => TypeInfo::known("NetHttpClient"),
+        "std.net.http.server" => TypeInfo::known("NetHttpServer"),
         _ => TypeInfo::known("Module"),
     }
 }

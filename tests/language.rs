@@ -682,7 +682,7 @@ fn supports_imported_net_http_client_and_server_modules() {
         &server_path,
         format!(
             r#"
-import "net.http.server" as server
+import "std.net.http.server" as server
 server.serve_once("127.0.0.1", {}, "hello from icoo")
 "#,
             port
@@ -698,7 +698,7 @@ server.serve_once("127.0.0.1", {}, "hello from icoo")
         &client_path,
         format!(
             r#"
-import "net.http.client" as client
+import "std.net.http.client" as client
 let response = client.get("http://127.0.0.1:{}/hello")
 print(response.get("status").to_string())
 print(response.get("body"))
@@ -717,15 +717,38 @@ net.http.client.get("http://127.0.0.1/")
     .unwrap_err();
     assert!(err.contains("undefined variable 'net'"));
 
+    let old_import_path = dir.join("old_import.icoo");
+    fs::write(
+        &old_import_path,
+        r#"
+import "net.http.client" as client
+"#,
+    )
+    .unwrap();
+    let err = run_file(old_import_path).unwrap_err();
+    assert!(err.contains("module path must end with '.icoo'"));
+
     let err_path = dir.join("bad.icoo");
     fs::write(
         &err_path,
         r#"
-import "net.http.client" as client
+import "std.net.http.client" as client
 client.get(1)
 "#,
     )
     .unwrap();
     let err = run_file(err_path).unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let std_fs_path = dir.join("std_fs.icoo");
+    fs::write(
+        &std_fs_path,
+        r#"
+import "std.fs" as fs
+print(fs.exists("target").to_string())
+"#,
+    )
+    .unwrap();
+    let output = run_file(std_fs_path).unwrap();
+    assert_eq!(output, vec!["true"]);
 }

@@ -1310,14 +1310,15 @@ fs.list_dir(path: String) -> Array<String>
 
 `fs.write_text` 会创建或覆盖目标文件。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
 
-部分内置库必须显式导入后才能使用，不会注册为全局常量：
+后续新增内置库统一使用 `std.` 前缀作为标准库命名空间。已有的 `math`、`time`、`json`、`env`、`fs` 仍保留全局访问能力，也可以通过 `std.*` 导入后使用；新增内置库默认必须显式导入，不会注册为全局常量：
 
 ```python
-import "net.http.client" as http_client
-import "net.http.server" as http_server
+import "std.fs" as fs
+import "std.net.http.client" as http_client
+import "std.net.http.server" as http_server
 ```
 
-`net.http.client` 模块：
+`std.net.http.client` 模块：
 
 ```text
 http_client.get(url: String) -> Map<String, Any>
@@ -1334,7 +1335,7 @@ headers: Map<String, String>
 
 第一版只支持 `http://`，不支持 HTTPS、重定向、流式响应和自定义请求头。
 
-`net.http.server` 模块：
+`std.net.http.server` 模块：
 
 ```text
 http_server.serve_once(host: String, port: Int, body: String) -> Nil

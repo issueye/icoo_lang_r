@@ -69,9 +69,9 @@ impl Interpreter {
     }
 
     fn load_import_value(&mut self, source: &str, span: Span) -> IcooResult<Value> {
-        if is_importable_native_module(source) {
+        if let Some(module_name) = importable_native_module_name(source) {
             return Ok(Value::NativeModule(Rc::new(NativeModule {
-                name: source.to_string(),
+                name: module_name.to_string(),
             })));
         }
         self.load_relative_module(source, span).map(Value::Module)
@@ -1105,7 +1105,7 @@ impl Interpreter {
         args: Vec<Value>,
         span: Span,
     ) -> IcooResult<Value> {
-        match (method.module.as_str(), method.name.as_str()) {
+        match (native_module_kind(&method.module), method.name.as_str()) {
             ("math", "abs") => {
                 expect_arity(&args, 1, span)?;
                 match &args[0] {
@@ -2357,7 +2357,7 @@ fn now_duration(span: Span) -> IcooResult<Duration> {
 }
 
 fn has_native_module_method(module: &str, name: &str) -> bool {
-    match module {
+    match native_module_kind(module) {
         "math" => matches!(
             name,
             "abs" | "floor" | "ceil" | "round" | "min" | "max" | "random"
@@ -2388,8 +2388,21 @@ fn canonical_module_path(path: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn is_importable_native_module(source: &str) -> bool {
-    matches!(source, "net.http.client" | "net.http.server")
+fn importable_native_module_name(source: &str) -> Option<&'static str> {
+    match source {
+        "std.math" => Some("std.math"),
+        "std.time" => Some("std.time"),
+        "std.json" => Some("std.json"),
+        "std.env" => Some("std.env"),
+        "std.fs" => Some("std.fs"),
+        "std.net.http.client" => Some("std.net.http.client"),
+        "std.net.http.server" => Some("std.net.http.server"),
+        _ => None,
+    }
+}
+
+fn native_module_kind(module: &str) -> &str {
+    module.strip_prefix("std.").unwrap_or(module)
 }
 
 fn imported_member(module: &Value, name: &str, span: Span) -> IcooResult<Value> {
