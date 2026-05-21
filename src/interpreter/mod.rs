@@ -1379,7 +1379,7 @@ impl Interpreter {
             ("web.ino", "App") | ("web.ino", "create") => {
                 expect_arity(&args, 0, span)?;
                 Ok(Value::WebInoApp(Rc::new(RefCell::new(WebInoApp {
-                    routes: Vec::new(),
+                    routes: HashMap::new(),
                 }))))
             }
             _ => Err(IcooError::runtime(
@@ -1470,11 +1470,15 @@ impl Interpreter {
                         Some(span),
                     ));
                 }
-                app.borrow_mut().routes.push(WebInoRoute {
-                    method: name.to_ascii_uppercase(),
-                    path,
-                    handler: args[1].clone(),
-                });
+                let method = name.to_ascii_uppercase();
+                app.borrow_mut().routes.insert(
+                    web_ino_route_key(&method, &path),
+                    WebInoRoute {
+                        method,
+                        path,
+                        handler: args[1].clone(),
+                    },
+                );
                 Ok(Value::WebInoApp(app))
             }
             "listen_once" => {
@@ -1757,8 +1761,7 @@ impl Interpreter {
         let route = app
             .borrow()
             .routes
-            .iter()
-            .find(|route| route.method == request.method && route.path == request.path)
+            .get(&web_ino_route_key(&request.method, &request.path))
             .cloned();
         let response = Rc::new(RefCell::new(WebInoResponse {
             status: 200,
@@ -3142,6 +3145,14 @@ fn web_ino_request_value(request: &ParsedWebInoRequest) -> Value {
     );
     map.insert("body".to_string(), Value::String(request.body.clone()));
     Value::Map(Rc::new(RefCell::new(map)))
+}
+
+fn web_ino_route_key(method: &str, path: &str) -> String {
+    let mut key = String::with_capacity(method.len() + path.len() + 1);
+    key.push_str(method);
+    key.push(' ');
+    key.push_str(path);
+    key
 }
 
 fn web_ino_http_response(response: &WebInoResponse) -> String {

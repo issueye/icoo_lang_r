@@ -378,7 +378,7 @@ pub struct IcooModule {
 
 #[derive(Debug)]
 pub struct WebInoApp {
-    pub routes: Vec<WebInoRoute>,
+    pub routes: HashMap<String, WebInoRoute>,
 }
 
 #[derive(Debug, Clone)]

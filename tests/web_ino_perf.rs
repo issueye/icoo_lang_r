@@ -56,6 +56,16 @@ fn ping(req: Map<String, Any>, res: WebInoResponse):
     res.send("ok:" + req.get("path"))
 
 app.get("/ping", ping)
+app.get("/route-0", ping)
+app.get("/route-1", ping)
+app.get("/route-2", ping)
+app.get("/route-3", ping)
+app.get("/route-4", ping)
+app.get("/route-5", ping)
+app.get("/route-6", ping)
+app.get("/route-7", ping)
+app.get("/route-8", ping)
+app.get("/route-9", ping)
 app.listen_with_workers("127.0.0.1", {}, {}, {})
 "#,
             port, request_count, workers
