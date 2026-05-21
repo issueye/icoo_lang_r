@@ -1085,7 +1085,14 @@ impl Interpreter {
             Value::WebInoApp(_) => {
                 matches!(
                     name,
-                    "get" | "post" | "listen_once" | "listen" | "listen_with_workers"
+                    "get"
+                        | "post"
+                        | "put"
+                        | "delete"
+                        | "options"
+                        | "listen_once"
+                        | "listen"
+                        | "listen_with_workers"
                 )
             }
             Value::WebInoResponse(_) => {
@@ -1361,11 +1368,16 @@ impl Interpreter {
                 let url = expect_string(&args[0], span)?;
                 http_client_request("GET", &url, "", span)
             }
-            ("net.http.client", "post") => {
+            ("net.http.client", "post" | "put") => {
                 expect_arity(&args, 2, span)?;
                 let url = expect_string(&args[0], span)?;
                 let body = expect_string(&args[1], span)?;
-                http_client_request("POST", &url, &body, span)
+                http_client_request(&method.name.to_ascii_uppercase(), &url, &body, span)
+            }
+            ("net.http.client", "delete" | "options") => {
+                expect_arity(&args, 1, span)?;
+                let url = expect_string(&args[0], span)?;
+                http_client_request(&method.name.to_ascii_uppercase(), &url, "", span)
             }
             ("net.http.client", "stream_get") => {
                 expect_arity(&args, 2, span)?;
@@ -1373,12 +1385,30 @@ impl Interpreter {
                 let handler = args[1].clone();
                 self.http_client_stream_request("GET", &url, "", handler, span)
             }
-            ("net.http.client", "stream_post") => {
+            ("net.http.client", "stream_post" | "stream_put") => {
                 expect_arity(&args, 3, span)?;
                 let url = expect_string(&args[0], span)?;
                 let body = expect_string(&args[1], span)?;
                 let handler = args[2].clone();
-                self.http_client_stream_request("POST", &url, &body, handler, span)
+                self.http_client_stream_request(
+                    http_stream_method_name(&method.name),
+                    &url,
+                    &body,
+                    handler,
+                    span,
+                )
+            }
+            ("net.http.client", "stream_delete" | "stream_options") => {
+                expect_arity(&args, 2, span)?;
+                let url = expect_string(&args[0], span)?;
+                let handler = args[1].clone();
+                self.http_client_stream_request(
+                    http_stream_method_name(&method.name),
+                    &url,
+                    "",
+                    handler,
+                    span,
+                )
             }
             ("net.http.server", "serve_once") => {
                 expect_arity(&args, 3, span)?;
@@ -1518,7 +1548,7 @@ impl Interpreter {
         span: Span,
     ) -> IcooResult<Value> {
         match name {
-            "get" | "post" => {
+            "get" | "post" | "put" | "delete" | "options" => {
                 expect_arity(&args, 2, span)?;
                 let path = expect_string(&args[0], span)?;
                 if !path.starts_with('/') {
@@ -3040,7 +3070,19 @@ fn has_native_module_method(module: &str, name: &str) -> bool {
                 | "get_env"
                 | "has_env"
         ),
-        "net.http.client" => matches!(name, "get" | "post" | "stream_get" | "stream_post"),
+        "net.http.client" => matches!(
+            name,
+            "get"
+                | "post"
+                | "put"
+                | "delete"
+                | "options"
+                | "stream_get"
+                | "stream_post"
+                | "stream_put"
+                | "stream_delete"
+                | "stream_options"
+        ),
         "net.http.server" => matches!(name, "serve_once"),
         "web.ino" => matches!(name, "App" | "create"),
         _ => false,
@@ -3176,9 +3218,10 @@ fn open_http_client_request(
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
-    let request = if method == "POST" {
+    let request = if http_method_has_request_body(method) {
         format!(
-            "POST {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
+            method,
             parsed.path,
             parsed.host,
             body.as_bytes().len(),
@@ -3186,14 +3229,29 @@ fn open_http_client_request(
         )
     } else {
         format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            parsed.path, parsed.host
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            method, parsed.path, parsed.host
         )
     };
     std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
         IcooError::runtime(format!("http client write failed: {}", err), Some(span))
     })?;
     Ok(stream)
+}
+
+fn http_method_has_request_body(method: &str) -> bool {
+    matches!(method, "POST" | "PUT")
+}
+
+fn http_stream_method_name(method_name: &str) -> &'static str {
+    match method_name {
+        "stream_get" => "GET",
+        "stream_post" => "POST",
+        "stream_put" => "PUT",
+        "stream_delete" => "DELETE",
+        "stream_options" => "OPTIONS",
+        _ => "GET",
+    }
 }
 
 fn http_client_request(method: &str, url: &str, body: &str, span: Span) -> IcooResult<Value> {

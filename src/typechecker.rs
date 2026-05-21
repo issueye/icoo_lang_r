@@ -981,13 +981,19 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "exe_path" | "get_env") => Some(TypeInfo::Unknown),
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
-        ("NetHttpClient", "get" | "post" | "stream_get" | "stream_post") => Some(TypeInfo::map(
+        (
+            "NetHttpClient",
+            "get" | "post" | "put" | "delete" | "options" | "stream_get" | "stream_post"
+            | "stream_put" | "stream_delete" | "stream_options",
+        ) => Some(TypeInfo::map(
             TypeInfo::known("String"),
             TypeInfo::known("Any"),
         )),
         ("NetHttpServer", "serve_once") => Some(TypeInfo::known("Nil")),
         ("WebIno", "App" | "create") => Some(TypeInfo::known("WebInoApp")),
-        ("WebInoApp", "get" | "post") => Some(TypeInfo::known("WebInoApp")),
+        ("WebInoApp", "get" | "post" | "put" | "delete" | "options") => {
+            Some(TypeInfo::known("WebInoApp"))
+        }
         ("WebInoApp", "listen_once" | "listen" | "listen_with_workers") => {
             Some(TypeInfo::known("Nil"))
         }
@@ -1153,25 +1159,25 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("NetHttpClient", "get") => Some(native_sig(
+        ("NetHttpClient", "get" | "delete" | "options") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("String")],
             None,
             return_type,
         )),
-        ("NetHttpClient", "post") => Some(native_sig(
+        ("NetHttpClient", "post" | "put") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
             None,
             return_type,
         )),
-        ("NetHttpClient", "stream_get") => Some(native_sig(
+        ("NetHttpClient", "stream_get" | "stream_delete" | "stream_options") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("Function")],
             None,
             return_type,
         )),
-        ("NetHttpClient", "stream_post") => Some(native_sig(
+        ("NetHttpClient", "stream_post" | "stream_put") => Some(native_sig(
             NativeArity::Exact(3),
             vec![Some("String"), Some("String"), Some("Function")],
             None,
@@ -1186,7 +1192,7 @@ fn native_method_sig(
         ("WebIno", "App" | "create") => {
             Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
         }
-        ("WebInoApp", "get" | "post") => Some(native_sig(
+        ("WebInoApp", "get" | "post" | "put" | "delete" | "options") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("Function")],
             None,

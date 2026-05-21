@@ -1036,6 +1036,86 @@ app.listen_with_workers("127.0.0.1", 1, 1, 0)
 }
 
 #[test]
+fn supports_http_put_delete_options_methods() {
+    let dir = PathBuf::from("target/icoo_module_tests/http_methods");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn echo(req: Map<String, Any>, res: WebInoResponse):
+    res.send(req.get("method") + ":" + req.get("body"))
+
+fn empty(req: Map<String, Any>, res: WebInoResponse):
+    res.send(req.get("method") + ":" + req.get("path"))
+
+fn stream_put(req: Map<String, Any>, res: WebInoResponse):
+    res.write(req.get("method"))
+    res.write(":")
+    res.write(req.get("body"))
+    res.end()
+
+app.put("/item", echo)
+app.delete("/item", empty)
+app.options("/item", empty)
+app.put("/stream", stream_put)
+app.listen("127.0.0.1", {}, 4)
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_path = dir.join("client.icoo");
+    fs::write(
+        &client_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+
+let put_response = client.put("http://127.0.0.1:{}/item", "updated")
+let delete_response = client.delete("http://127.0.0.1:{}/item")
+let options_response = client.options("http://127.0.0.1:{}/item")
+let chunks = []
+
+fn on_chunk(chunk: String):
+    chunks.push(chunk)
+
+let stream_response = client.stream_put("http://127.0.0.1:{}/stream", "streamed", on_chunk)
+print(put_response.get("body"))
+print(delete_response.get("body"))
+print(options_response.get("body"))
+print(stream_response.get("chunks").to_string())
+print(chunks.join(""))
+"#,
+            port, port, port, port
+        ),
+    )
+    .unwrap();
+    let output = run_file(client_path).unwrap();
+    assert_eq!(
+        output,
+        vec![
+            "PUT:updated",
+            "DELETE:/item",
+            "OPTIONS:/item",
+            "3",
+            "PUT:streamed"
+        ]
+    );
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
 fn supports_std_web_ino_file_uploads() {
     let dir = PathBuf::from("target/icoo_module_tests/web_ino_upload");
     fs::create_dir_all(&dir).unwrap();

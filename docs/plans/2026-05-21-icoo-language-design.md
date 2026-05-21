@@ -1370,8 +1370,14 @@ toml.parse(text: String) -> Any
 ```text
 http_client.get(url: String) -> Map<String, Any>
 http_client.post(url: String, body: String) -> Map<String, Any>
+http_client.put(url: String, body: String) -> Map<String, Any>
+http_client.delete(url: String) -> Map<String, Any>
+http_client.options(url: String) -> Map<String, Any>
 http_client.stream_get(url: String, handler: Function) -> Map<String, Any>
 http_client.stream_post(url: String, body: String, handler: Function) -> Map<String, Any>
+http_client.stream_put(url: String, body: String, handler: Function) -> Map<String, Any>
+http_client.stream_delete(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_options(url: String, handler: Function) -> Map<String, Any>
 ```
 
 返回的 Map 至少包含：
@@ -1382,7 +1388,7 @@ body: String
 headers: Map<String, String>
 ```
 
-`stream_get` 和 `stream_post` 用于流式接收响应体。客户端会先读取响应头，然后每收到一个响应片段就调用 handler；如果服务端使用 `Transfer-Encoding: chunked`，则按 HTTP chunk 调用；普通 `Content-Length` 或连接关闭响应按读取片段调用。handler 接收一个 `String` 参数，适合文本流、SSE 风格输出、日志输出等场景。流式接口返回的 Map 包含 `status`、`headers`、`body`、`streamed` 和 `chunks`，其中 `body` 为空字符串，正文由 handler 消费。
+`stream_get`、`stream_post`、`stream_put`、`stream_delete`、`stream_options` 用于流式接收响应体。客户端会先读取响应头，然后每收到一个响应片段就调用 handler；如果服务端使用 `Transfer-Encoding: chunked`，则按 HTTP chunk 调用；普通 `Content-Length` 或连接关闭响应按读取片段调用。handler 接收一个 `String` 参数，适合文本流、SSE 风格输出、日志输出等场景。流式接口返回的 Map 包含 `status`、`headers`、`body`、`streamed` 和 `chunks`，其中 `body` 为空字符串，正文由 handler 消费。
 
 ```python
 let parts = []
@@ -1411,6 +1417,9 @@ ino.create() -> WebInoApp
 
 app.get(path: String, handler: Function) -> WebInoApp
 app.post(path: String, handler: Function) -> WebInoApp
+app.put(path: String, handler: Function) -> WebInoApp
+app.delete(path: String, handler: Function) -> WebInoApp
+app.options(path: String, handler: Function) -> WebInoApp
 app.listen_once(host: String, port: Int) -> Nil
 app.listen(host: String, port: Int, max_requests: Int) -> Nil
 app.listen_with_workers(host: String, port: Int, max_requests: Int, workers: Int) -> Nil
