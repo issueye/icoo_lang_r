@@ -1399,6 +1399,7 @@ ino.create() -> WebInoApp
 app.get(path: String, handler: Function) -> WebInoApp
 app.post(path: String, handler: Function) -> WebInoApp
 app.listen_once(host: String, port: Int) -> Nil
+app.listen(host: String, port: Int, max_requests: Int) -> Nil
 
 res.status(code: Int) -> WebInoResponse
 res.send(value: Any) -> Nil
@@ -1413,7 +1414,9 @@ fn home(req: Map<String, Any>, res: WebInoResponse):
     res.send("hello " + req.get("path"))
 ```
 
-`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`。`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证；后续可以扩展为长生命周期 `listen`、中间件、路径参数、路由组、错误处理和 async handler。
+`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`。`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
+
+`listen` 会并发接收和读取最多 `max_requests` 个连接，适合验证多个客户端同时连接的服务行为。当前解释器中的 Icoo handler 仍在解释器线程内逐个执行，因为用户函数闭包和运行时环境还不是线程安全对象；后续可以在运行时对象可安全跨线程后扩展为真正的并发 handler、长生命周期服务、中间件、路径参数、路由组、错误处理和 async handler。
 
 事件循环对象方法：
 

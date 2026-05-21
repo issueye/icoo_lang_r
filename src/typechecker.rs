@@ -988,7 +988,7 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("NetHttpServer", "serve_once") => Some(TypeInfo::known("Nil")),
         ("WebIno", "App" | "create") => Some(TypeInfo::known("WebInoApp")),
         ("WebInoApp", "get" | "post") => Some(TypeInfo::known("WebInoApp")),
-        ("WebInoApp", "listen_once") => Some(TypeInfo::known("Nil")),
+        ("WebInoApp", "listen_once" | "listen") => Some(TypeInfo::known("Nil")),
         ("WebInoResponse", "status") => Some(TypeInfo::known("WebInoResponse")),
         ("WebInoResponse", "send" | "json") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
@@ -1181,6 +1181,12 @@ fn native_method_sig(
         ("WebInoApp", "listen_once") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("Int")],
+            None,
+            return_type,
+        )),
+        ("WebInoApp", "listen") => Some(native_sig(
+            NativeArity::Exact(3),
+            vec![Some("String"), Some("Int"), Some("Int")],
             None,
             return_type,
         )),

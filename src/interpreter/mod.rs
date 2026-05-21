@@ -1082,7 +1082,7 @@ impl Interpreter {
                     | "backend_name"
                     | "worker_threads"
             ),
-            Value::WebInoApp(_) => matches!(name, "get" | "post" | "listen_once"),
+            Value::WebInoApp(_) => matches!(name, "get" | "post" | "listen_once" | "listen"),
             Value::WebInoResponse(_) => matches!(name, "status" | "send" | "json"),
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
             Value::Bool(_) => matches!(name, "to_int"),
@@ -1485,6 +1485,26 @@ impl Interpreter {
                 self.web_ino_listen_once(app, &host, port as u16, span)?;
                 Ok(Value::Nil)
             }
+            "listen" => {
+                expect_arity(&args, 3, span)?;
+                let host = expect_string(&args[0], span)?;
+                let port = expect_int(&args[1], span)?;
+                let max_requests = expect_int(&args[2], span)?;
+                if !(1..=65535).contains(&port) {
+                    return Err(IcooError::runtime(
+                        "server port must be between 1 and 65535",
+                        Some(span),
+                    ));
+                }
+                if max_requests <= 0 {
+                    return Err(IcooError::runtime(
+                        "max_requests must be positive",
+                        Some(span),
+                    ));
+                }
+                self.web_ino_listen(app, &host, port as u16, max_requests as usize, span)?;
+                Ok(Value::Nil)
+            }
             _ => Err(IcooError::runtime("unknown WebInoApp method", Some(span))),
         }
     }
@@ -1563,7 +1583,93 @@ impl Interpreter {
             IcooError::runtime(format!("web.ino request read failed: {}", err), Some(span))
         })?;
         let request_text = String::from_utf8_lossy(&buffer[..size]).into_owned();
-        let request = parse_web_ino_request(&request_text, span)?;
+        self.web_ino_handle_request(app, &request_text, &mut stream, span)
+    }
+
+    fn web_ino_listen(
+        &mut self,
+        app: Rc<RefCell<WebInoApp>>,
+        host: &str,
+        port: u16,
+        max_requests: usize,
+        span: Span,
+    ) -> IcooResult<()> {
+        let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
+            IcooError::runtime(format!("web.ino listen bind failed: {}", err), Some(span))
+        })?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let accept_handle = std::thread::spawn(move || {
+            for _ in 0..max_requests {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let tx = tx.clone();
+                        std::thread::spawn(move || {
+                            let mut buffer = [0_u8; 8192];
+                            let request = std::io::Read::read(&mut stream, &mut buffer)
+                                .map(|size| String::from_utf8_lossy(&buffer[..size]).into_owned())
+                                .map_err(|err| format!("web.ino request read failed: {}", err));
+                            let _ = tx.send(WebInoAccepted::Request { request, stream });
+                        });
+                    }
+                    Err(err) => {
+                        let _ = tx.send(WebInoAccepted::AcceptError(format!(
+                            "web.ino listen accept failed: {}",
+                            err
+                        )));
+                        break;
+                    }
+                }
+            }
+        });
+
+        for _ in 0..max_requests {
+            match rx.recv().map_err(|err| {
+                IcooError::runtime(format!("web.ino listen failed: {}", err), Some(span))
+            })? {
+                WebInoAccepted::Request {
+                    request: Ok(request),
+                    mut stream,
+                } => self.web_ino_handle_request(app.clone(), &request, &mut stream, span)?,
+                WebInoAccepted::Request {
+                    request: Err(message),
+                    mut stream,
+                } => {
+                    let response = WebInoResponse {
+                        status: 400,
+                        body: message,
+                        content_type: "text/plain; charset=utf-8".to_string(),
+                        sent: true,
+                    };
+                    let response_text = web_ino_http_response(&response);
+                    std::io::Write::write_all(&mut stream, response_text.as_bytes()).map_err(
+                        |err| {
+                            IcooError::runtime(
+                                format!("web.ino response write failed: {}", err),
+                                Some(span),
+                            )
+                        },
+                    )?;
+                }
+                WebInoAccepted::AcceptError(message) => {
+                    let _ = accept_handle.join();
+                    return Err(IcooError::runtime(message, Some(span)));
+                }
+            }
+        }
+        accept_handle
+            .join()
+            .map_err(|_| IcooError::runtime("web.ino listen accept thread panicked", Some(span)))?;
+        Ok(())
+    }
+
+    fn web_ino_handle_request(
+        &mut self,
+        app: Rc<RefCell<WebInoApp>>,
+        request_text: &str,
+        stream: &mut std::net::TcpStream,
+        span: Span,
+    ) -> IcooResult<()> {
+        let request = parse_web_ino_request(request_text, span)?;
         let route = app
             .borrow()
             .routes
@@ -1597,7 +1703,7 @@ impl Interpreter {
             response_ref.sent = true;
         }
         let response_text = web_ino_http_response(&response.borrow());
-        std::io::Write::write_all(&mut stream, response_text.as_bytes()).map_err(|err| {
+        std::io::Write::write_all(stream, response_text.as_bytes()).map_err(|err| {
             IcooError::runtime(
                 format!("web.ino response write failed: {}", err),
                 Some(span),
@@ -2895,6 +3001,14 @@ struct ParsedWebInoRequest {
     query: String,
     headers: HashMap<String, Value>,
     body: String,
+}
+
+enum WebInoAccepted {
+    Request {
+        request: Result<String, String>,
+        stream: std::net::TcpStream,
+    },
+    AcceptError(String),
 }
 
 fn parse_web_ino_request(request: &str, span: Span) -> IcooResult<ParsedWebInoRequest> {

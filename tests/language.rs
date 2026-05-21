@@ -951,3 +951,77 @@ app.get("/", 1)
     .unwrap_err();
     assert!(err.contains("type error: expected Function for argument 2 but got Int"));
 }
+
+#[test]
+fn supports_std_web_ino_concurrent_request_acceptance() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_concurrent");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.create()
+
+fn echo(req: Map<String, Any>, res: WebInoResponse):
+    res.send("path=" + req.get("path"))
+
+app.get("/a", echo)
+app.get("/b", echo)
+app.listen("127.0.0.1", {}, 2)
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let client_a_path = dir.join("client_a.icoo");
+    fs::write(
+        &client_a_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+let response = client.get("http://127.0.0.1:{}/a")
+print(response.get("body"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+    let client_b_path = dir.join("client_b.icoo");
+    fs::write(
+        &client_b_path,
+        format!(
+            r#"
+import "std.net.http.client" as client
+let response = client.get("http://127.0.0.1:{}/b")
+print(response.get("body"))
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let client_a = thread::spawn(move || run_file(client_a_path));
+    let client_b = thread::spawn(move || run_file(client_b_path));
+    let mut output = Vec::new();
+    output.extend(client_a.join().unwrap().unwrap());
+    output.extend(client_b.join().unwrap().unwrap());
+    output.sort();
+    assert_eq!(output, vec!["path=/a", "path=/b"]);
+    server_handle.join().unwrap().unwrap();
+
+    let err = run(r#"
+import "std.web.ino" as ino
+let app = ino.App()
+app.listen("127.0.0.1", 1, 0)
+"#)
+    .unwrap_err();
+    assert!(err.contains("max_requests must be positive"));
+}
