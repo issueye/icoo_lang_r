@@ -15,8 +15,10 @@ fn run(source: &str) -> Result<Vec<String>, String> {
     .map_err(|err| err.to_string())
 }
 
-fn start_http_server(response: &'static str) -> (u16, thread::JoinHandle<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+fn spawn_http_server(
+    listener: TcpListener,
+    response: &'static str,
+) -> (u16, thread::JoinHandle<String>) {
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
@@ -54,6 +56,57 @@ fn start_http_server(response: &'static str) -> (u16, thread::JoinHandle<String>
         String::from_utf8_lossy(&request).into_owned()
     });
     (port, handle)
+}
+
+fn start_http_server(response: &'static str) -> (u16, thread::JoinHandle<String>) {
+    spawn_http_server(TcpListener::bind("127.0.0.1:0").unwrap(), response)
+}
+
+#[test]
+fn http_client_uses_custom_port_from_url() {
+    let (port, server) = start_http_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\ncustom",
+    );
+
+    let output = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+let response = client.get("http://127.0.0.1:{}/custom-port")
+print(response.get("status").to_string())
+print(response.get("body"))
+"#,
+        port
+    ))
+    .unwrap();
+    let request = server.join().unwrap();
+
+    assert_eq!(output, vec!["200", "custom"]);
+    assert!(request.contains("GET /custom-port HTTP/1.1"), "{request}");
+}
+
+#[test]
+fn http_client_uses_default_port_when_url_omits_port() {
+    let Ok(listener) = TcpListener::bind("127.0.0.1:80") else {
+        return;
+    };
+    let (_port, server) = spawn_http_server(
+        listener,
+        "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\ndefault",
+    );
+
+    let output = run(r#"
+import "std.net.http.client" as client
+
+let response = client.get("http://127.0.0.1/default-port")
+print(response.get("status").to_string())
+print(response.get("body"))
+"#)
+    .unwrap();
+    let request = server.join().unwrap();
+
+    assert_eq!(output, vec!["200", "default"]);
+    assert!(request.contains("GET /default-port HTTP/1.1"), "{request}");
 }
 
 #[test]
@@ -158,6 +211,55 @@ print(chunks.join(""))
     let _request = server.join().unwrap();
 
     assert_eq!(output, vec!["200", "ok"]);
+}
+
+#[test]
+fn http_client_reports_malformed_chunked_response() {
+    let (port, server) = start_http_server(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhi\r\n0\r\n\r\n",
+    );
+
+    let err = run(&format!(
+        r#"
+import "std.net.http.client" as client
+client.get("http://127.0.0.1:{}/bad-chunk")
+"#,
+        port
+    ))
+    .unwrap_err();
+    let _request = server.join().unwrap();
+
+    assert!(err.contains("invalid chunked response"), "{err}");
+}
+
+#[test]
+fn http_client_streams_content_length_response() {
+    let (port, server) = start_http_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world",
+    );
+
+    let output = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+let chunks = []
+
+fn on_chunk(chunk: String):
+    chunks.push(chunk)
+
+let response = client.stream_get("http://127.0.0.1:{}/length", on_chunk)
+print(response.get("status").to_string())
+print(response.get("headers").get("content-length"))
+print(response.get("chunks").to_string())
+print(chunks.join(""))
+"#,
+        port
+    ))
+    .unwrap();
+    let request = server.join().unwrap();
+
+    assert_eq!(output, vec!["200", "11", "1", "hello world"]);
+    assert!(request.contains("GET /length HTTP/1.1"), "{request}");
 }
 
 #[test]

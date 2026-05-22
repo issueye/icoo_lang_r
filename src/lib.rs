@@ -8,6 +8,7 @@ pub mod runtime;
 pub mod typechecker;
 
 use error::IcooError;
+pub use runtime::permissions::{PermissionRule, RuntimePermissions};
 use std::path::Path;
 
 pub fn run_source(source: &str) -> Result<(), IcooError> {
@@ -16,6 +17,18 @@ pub fn run_source(source: &str) -> Result<(), IcooError> {
     resolver::resolve(&program)?;
     typechecker::check(&program)?;
     let mut interpreter = interpreter::Interpreter::new();
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_permissions(
+    source: &str,
+    permissions: RuntimePermissions,
+) -> Result<(), IcooError> {
+    let tokens = lexer::lex(source)?;
+    let program = parser::parse(tokens)?;
+    resolver::resolve(&program)?;
+    typechecker::check(&program)?;
+    let mut interpreter = interpreter::Interpreter::with_permissions(permissions);
     interpreter.interpret(&program)
 }
 
