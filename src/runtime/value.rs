@@ -18,6 +18,7 @@ pub enum Value {
     Int(i64),
     Float(f64),
     String(String),
+    Bytes(Rc<Vec<u8>>),
     Array(Rc<RefCell<Vec<Value>>>),
     Map(Rc<RefCell<HashMap<String, Value>>>),
     Function(Rc<IcooFunction>),
@@ -57,6 +58,7 @@ impl Value {
             Value::Int(_) => "Int".to_string(),
             Value::Float(_) => "Float".to_string(),
             Value::String(_) => "String".to_string(),
+            Value::Bytes(_) => "Bytes".to_string(),
             Value::Array(_) => "Array".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::Function(_) => "Function".to_string(),
@@ -88,6 +90,7 @@ impl Value {
                 text
             }
             Value::String(value) => value.clone(),
+            Value::Bytes(bytes) => bytes_debug_display(bytes),
             Value::Array(values) => {
                 let parts: Vec<String> = values.borrow().iter().map(Value::display).collect();
                 format!("[{}]", parts.join(", "))
@@ -123,6 +126,25 @@ impl Value {
             Value::Instance(instance) => format!("<{} instance>", instance.borrow().class.name),
         }
     }
+}
+
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn bytes_debug_display(bytes: &[u8]) -> String {
+    let preview_len = bytes.len().min(16);
+    let mut preview = bytes_to_hex(&bytes[..preview_len]);
+    if bytes.len() > preview_len {
+        preview.push_str("...");
+    }
+    format!("<bytes len={} hex={}>", bytes.len(), preview)
 }
 
 #[derive(Clone)]

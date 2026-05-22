@@ -130,12 +130,27 @@ fs.read_text("target/icoo_permissions_matrix/missing.txt")"#,
         ),
         (
             r#"import "std.io.fs" as fs
+fs.read_bytes("target/icoo_permissions_matrix/missing.txt")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
 fs.write_text("target/icoo_permissions_matrix/denied.txt", "nope")"#,
             "permission denied: fs.write",
         ),
         (
             r#"import "std.io.fs" as fs
+fs.write_bytes("target/icoo_permissions_matrix/denied.txt", "nope".to_bytes())"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
 fs.append_text("target/icoo_permissions_matrix/denied.txt", "nope")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.append_bytes("target/icoo_permissions_matrix/denied.txt", "nope".to_bytes())"#,
             "permission denied: fs.write",
         ),
         (

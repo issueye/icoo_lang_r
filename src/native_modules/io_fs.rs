@@ -1,6 +1,6 @@
 use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
-use crate::interpreter::{expect_arity, expect_string, Interpreter};
+use crate::interpreter::{expect_arity, expect_bytes, expect_string, Interpreter};
 use crate::lexer::token::Span;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
@@ -41,6 +41,13 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "String",
         },
         NativeMethodSpec {
+            name: "read_bytes",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bytes",
+        },
+        NativeMethodSpec {
             name: "write_text",
             arity: NativeAritySpec::Exact(2),
             params: &["String", "String"],
@@ -48,9 +55,23 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Nil",
         },
         NativeMethodSpec {
+            name: "write_bytes",
+            arity: NativeAritySpec::Exact(2),
+            params: &["String", "Bytes"],
+            variadic: None,
+            return_type: "Nil",
+        },
+        NativeMethodSpec {
             name: "append_text",
             arity: NativeAritySpec::Exact(2),
             params: &["String", "String"],
+            variadic: None,
+            return_type: "Nil",
+        },
+        NativeMethodSpec {
+            name: "append_bytes",
+            arity: NativeAritySpec::Exact(2),
+            params: &["String", "Bytes"],
             variadic: None,
             return_type: "Nil",
         },
@@ -108,6 +129,16 @@ fn dispatch(
                     IcooError::runtime(format!("io.fs.read_text() failed: {}", err), Some(span))
                 })
         }
+        "read_bytes" => {
+            expect_arity(&args, 1, span)?;
+            let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_read(span)?;
+            std::fs::read(&path)
+                .map(|bytes| Value::Bytes(Rc::new(bytes)))
+                .map_err(|err| {
+                    IcooError::runtime(format!("io.fs.read_bytes() failed: {}", err), Some(span))
+                })
+        }
         "write_text" => {
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
@@ -117,6 +148,17 @@ fn dispatch(
                 .map(|_| Value::Nil)
                 .map_err(|err| {
                     IcooError::runtime(format!("io.fs.write_text() failed: {}", err), Some(span))
+                })
+        }
+        "write_bytes" => {
+            expect_arity(&args, 2, span)?;
+            let path = expect_string(&args[0], span)?;
+            let content = expect_bytes(&args[1], span)?;
+            runtime.permissions().check_fs_write(span)?;
+            std::fs::write(&path, content.as_slice())
+                .map(|_| Value::Nil)
+                .map_err(|err| {
+                    IcooError::runtime(format!("io.fs.write_bytes() failed: {}", err), Some(span))
                 })
         }
         "append_text" => {
@@ -132,6 +174,21 @@ fn dispatch(
                 .map(|_| Value::Nil)
                 .map_err(|err| {
                     IcooError::runtime(format!("io.fs.append_text() failed: {}", err), Some(span))
+                })
+        }
+        "append_bytes" => {
+            expect_arity(&args, 2, span)?;
+            let path = expect_string(&args[0], span)?;
+            let content = expect_bytes(&args[1], span)?;
+            runtime.permissions().check_fs_write(span)?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut file| file.write_all(content.as_slice()))
+                .map(|_| Value::Nil)
+                .map_err(|err| {
+                    IcooError::runtime(format!("io.fs.append_bytes() failed: {}", err), Some(span))
                 })
         }
         "list_dir" => {

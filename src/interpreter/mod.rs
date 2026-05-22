@@ -1090,7 +1090,11 @@ impl Interpreter {
             return true;
         }
         match receiver {
-            Value::String(_) => matches!(name, "len" | "is_empty" | "contains"),
+            Value::String(_) => matches!(name, "len" | "is_empty" | "contains" | "to_bytes"),
+            Value::Bytes(_) => matches!(
+                name,
+                "len" | "is_empty" | "slice" | "concat" | "equals" | "to_hex"
+            ),
             Value::Array(_) => matches!(
                 name,
                 "len"
@@ -1208,13 +1212,20 @@ impl Interpreter {
         span: Span,
     ) -> IcooResult<Value> {
         match method.name.as_str() {
-            "to_string" => return Ok(Value::String(method.receiver.display())),
-            "type_name" => return Ok(Value::String(method.receiver.type_name())),
+            "to_string" if !matches!(method.receiver, Value::Bytes(_)) => {
+                expect_arity(&args, 0, span)?;
+                return Ok(Value::String(method.receiver.display()));
+            }
+            "type_name" => {
+                expect_arity(&args, 0, span)?;
+                return Ok(Value::String(method.receiver.type_name()));
+            }
             _ => {}
         }
 
         match &method.receiver {
             Value::String(value) => self.string_method(value, &method.name, args, span),
+            Value::Bytes(bytes) => self.bytes_method(bytes.clone(), &method.name, args, span),
             Value::Array(values) => self.array_method(values.clone(), &method.name, args, span),
             Value::Map(values) => self.map_method(values.clone(), &method.name, args, span),
             Value::EventLoop(loop_ref) => {
@@ -1564,7 +1575,92 @@ impl Interpreter {
                 let needle = expect_string(&args[0], span)?;
                 Ok(Value::Bool(value.contains(&needle)))
             }
+            "to_bytes" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bytes(Rc::new(value.as_bytes().to_vec())))
+            }
             _ => Err(IcooError::runtime("unknown String method", Some(span))),
+        }
+    }
+
+    fn bytes_method(
+        &self,
+        bytes: Rc<Vec<u8>>,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
+        match name {
+            "to_string" => {
+                if args.len() > 1 {
+                    return Err(arity_error("to_string", "0 or 1", args.len(), span));
+                }
+                let mode = if args.is_empty() {
+                    "strict".to_string()
+                } else {
+                    expect_string(&args[0], span)?
+                };
+                match mode.as_str() {
+                    "strict" => String::from_utf8(bytes.as_ref().clone())
+                        .map(Value::String)
+                        .map_err(|err| {
+                            IcooError::runtime(
+                                format!("Bytes.to_string() failed: {}", err),
+                                Some(span),
+                            )
+                        }),
+                    "lossy" => Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+                    "hex" => Ok(Value::String(bytes_to_hex(&bytes))),
+                    _ => Err(IcooError::runtime(
+                        "Bytes.to_string() mode must be 'strict', 'lossy', or 'hex'",
+                        Some(span),
+                    )),
+                }
+            }
+            "len" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Int(bytes.len() as i64))
+            }
+            "is_empty" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::Bool(bytes.is_empty()))
+            }
+            "slice" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(arity_error("slice", "1 or 2", args.len(), span));
+                }
+                let start = expect_byte_index(expect_int(&args[0], span)?, bytes.len(), span)?;
+                let end = if args.len() == 2 {
+                    expect_byte_index(expect_int(&args[1], span)?, bytes.len(), span)?
+                } else {
+                    bytes.len()
+                };
+                if end < start {
+                    return Err(IcooError::runtime(
+                        "Bytes.slice() end must be greater than or equal to start",
+                        Some(span),
+                    ));
+                }
+                Ok(Value::Bytes(Rc::new(bytes[start..end].to_vec())))
+            }
+            "concat" => {
+                expect_arity(&args, 1, span)?;
+                let other = expect_bytes(&args[0], span)?;
+                let mut result = Vec::with_capacity(bytes.len() + other.len());
+                result.extend_from_slice(&bytes);
+                result.extend_from_slice(&other);
+                Ok(Value::Bytes(Rc::new(result)))
+            }
+            "equals" => {
+                expect_arity(&args, 1, span)?;
+                let other = expect_bytes(&args[0], span)?;
+                Ok(Value::Bool(bytes.as_slice() == other.as_slice()))
+            }
+            "to_hex" => {
+                expect_arity(&args, 0, span)?;
+                Ok(Value::String(bytes_to_hex(&bytes)))
+            }
+            _ => Err(IcooError::runtime("unknown Bytes method", Some(span))),
         }
     }
 
@@ -2187,6 +2283,7 @@ fn value_matches_type(value: &Value, type_name: &str) -> bool {
         "Int" => matches!(value, Value::Int(_)),
         "Float" => matches!(value, Value::Float(_)),
         "String" => matches!(value, Value::String(_)),
+        "Bytes" => matches!(value, Value::Bytes(_)),
         "Array" => matches!(value, Value::Array(_)),
         "Map" => matches!(value, Value::Map(_)),
         "Function" => matches!(
@@ -2285,6 +2382,7 @@ fn value_equal(left: &Value, right: &Value) -> bool {
         (Value::Int(a), Value::Float(b)) => (*a as f64) == *b,
         (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
         (Value::String(a), Value::String(b)) => a == b,
+        (Value::Bytes(a), Value::Bytes(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => Rc::ptr_eq(a, b),
         (Value::Map(a), Value::Map(b)) => Rc::ptr_eq(a, b),
         (Value::Coroutine(a), Value::Coroutine(b)) => Rc::ptr_eq(a, b),
@@ -2326,11 +2424,35 @@ pub(crate) fn expect_string(value: &Value, span: Span) -> IcooResult<String> {
     }
 }
 
+pub(crate) fn expect_bytes(value: &Value, span: Span) -> IcooResult<Rc<Vec<u8>>> {
+    match value {
+        Value::Bytes(value) => Ok(value.clone()),
+        _ => Err(IcooError::runtime("expected Bytes argument", Some(span))),
+    }
+}
+
 pub(crate) fn expect_int(value: &Value, span: Span) -> IcooResult<i64> {
     match value {
         Value::Int(value) => Ok(*value),
         _ => Err(IcooError::runtime("expected Int argument", Some(span))),
     }
+}
+
+fn expect_byte_index(index: i64, len: usize, span: Span) -> IcooResult<usize> {
+    if index < 0 {
+        return Err(IcooError::runtime(
+            "byte index must be non-negative",
+            Some(span),
+        ));
+    }
+    let index = index as usize;
+    if index > len {
+        return Err(IcooError::runtime(
+            format!("byte index {} is out of bounds for length {}", index, len),
+            Some(span),
+        ));
+    }
+    Ok(index)
 }
 
 pub(crate) fn expect_number(value: &Value, span: Span) -> IcooResult<f64> {
@@ -2425,6 +2547,10 @@ pub(crate) fn value_to_json(value: &Value, span: Span) -> IcooResult<serde_json:
                 IcooError::runtime("Float value cannot be represented as JSON", Some(span))
             }),
         Value::String(value) => Ok(serde_json::Value::String(value.clone())),
+        Value::Bytes(_) => Err(IcooError::runtime(
+            "Bytes cannot be represented as JSON",
+            Some(span),
+        )),
         Value::Array(values) => values
             .borrow()
             .iter()
@@ -2488,6 +2614,10 @@ pub(crate) fn value_to_toml(value: &Value, span: Span) -> IcooResult<toml::Value
             Some(span),
         )),
         Value::String(value) => Ok(toml::Value::String(value.clone())),
+        Value::Bytes(_) => Err(IcooError::runtime(
+            "Bytes cannot be represented as TOML",
+            Some(span),
+        )),
         Value::Array(values) => values
             .borrow()
             .iter()

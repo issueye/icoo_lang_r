@@ -976,7 +976,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Io", "print") => Some(TypeInfo::known("Nil")),
         ("IoFs", "exists" | "is_file" | "is_dir") => Some(TypeInfo::known("Bool")),
         ("IoFs", "read_text") => Some(TypeInfo::known("String")),
-        ("IoFs", "write_text" | "append_text") => Some(TypeInfo::known("Nil")),
+        ("IoFs", "read_bytes") => Some(TypeInfo::known("Bytes")),
+        ("IoFs", "write_text" | "append_text" | "write_bytes" | "append_bytes") => {
+            Some(TypeInfo::known("Nil"))
+        }
         ("IoFs", "list_dir") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "name" | "family" | "arch" | "cwd") => Some(TypeInfo::known("String")),
         ("Os", "pid") => Some(TypeInfo::known("Int")),
@@ -1019,6 +1022,11 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Map", "keys" | "values" | "entries") => Some(TypeInfo::known("Array")),
         ("String", "len") => Some(TypeInfo::known("Int")),
         ("String", "contains" | "is_empty") => Some(TypeInfo::known("Bool")),
+        ("String", "to_bytes") => Some(TypeInfo::known("Bytes")),
+        ("Bytes", "len") => Some(TypeInfo::known("Int")),
+        ("Bytes", "is_empty" | "equals") => Some(TypeInfo::known("Bool")),
+        ("Bytes", "slice" | "concat") => Some(TypeInfo::known("Bytes")),
+        ("Bytes", "to_hex") => Some(TypeInfo::known("String")),
         _ => None,
     }
 }
@@ -1043,6 +1051,14 @@ fn native_method_sig_for_receiver(
     method_name: &str,
 ) -> Option<NativeMethodSig> {
     let return_type = native_method_return_for_receiver(receiver, method_name)?;
+    if receiver.name() == Some("Bytes") && method_name == "to_string" {
+        return Some(native_sig(
+            NativeArity::Range { min: 0, max: 1 },
+            vec![Some("String")],
+            None,
+            return_type,
+        ));
+    }
     if matches!(method_name, "to_string" | "type_name") {
         return Some(native_sig(NativeArity::Exact(0), vec![], None, return_type));
     }
@@ -1103,7 +1119,7 @@ fn native_method_sig(
     return_type: TypeInfo,
 ) -> Option<NativeMethodSig> {
     match (type_name, method_name) {
-        ("String", "len" | "is_empty") => {
+        ("String", "len" | "is_empty" | "to_bytes") => {
             Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
         }
         ("String", "contains") => Some(native_sig(
@@ -1182,15 +1198,23 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("IoFs", "exists" | "is_file" | "is_dir" | "read_text" | "list_dir") => Some(native_sig(
-            NativeArity::Exact(1),
-            vec![Some("String")],
-            None,
-            return_type,
-        )),
+        ("IoFs", "exists" | "is_file" | "is_dir" | "read_text" | "read_bytes" | "list_dir") => {
+            Some(native_sig(
+                NativeArity::Exact(1),
+                vec![Some("String")],
+                None,
+                return_type,
+            ))
+        }
         ("IoFs", "write_text" | "append_text") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("IoFs", "write_bytes" | "append_bytes") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("Bytes")],
             None,
             return_type,
         )),
@@ -1368,6 +1392,27 @@ fn native_method_sig(
         ("Map", "set") => Some(native_sig(
             NativeArity::Exact(2),
             vec![Some("String"), Some("Any")],
+            None,
+            return_type,
+        )),
+        ("Bytes", "len" | "is_empty" | "to_hex") => {
+            Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
+        }
+        ("Bytes", "to_string") => Some(native_sig(
+            NativeArity::Range { min: 0, max: 1 },
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Bytes", "slice") => Some(native_sig(
+            NativeArity::Range { min: 1, max: 2 },
+            vec![Some("Int"), Some("Int")],
+            None,
+            return_type,
+        )),
+        ("Bytes", "concat" | "equals") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Bytes")],
             None,
             return_type,
         )),

@@ -205,11 +205,15 @@ let path = "target/icoo_native_modules_matrix/fs.txt"
 io.print("io-ok")
 fs.write_text(path, "hello")
 fs.append_text(path, " fs")
+let bytes_path = "target/icoo_native_modules_matrix/fs.bin"
+fs.write_bytes(bytes_path, "io".to_bytes())
+fs.append_bytes(bytes_path, "-bytes".to_bytes())
 
 print(fs.exists(path).to_string())
 print(fs.is_file(path).to_string())
 print(fs.is_dir("target/icoo_native_modules_matrix").to_string())
 print(fs.read_text(path))
+print(fs.read_bytes(bytes_path).to_string())
 print(fs.list_dir("target/icoo_native_modules_matrix").includes("fs.txt").to_string())
 
 print(os.name().len() > 0)
@@ -223,8 +227,8 @@ print(os.has_env("__ICOO_NATIVE_MATRIX_MISSING__").to_string())
     assert_eq!(
         output,
         vec![
-            "io-ok", "true", "true", "true", "hello fs", "true", "true", "true", "true", "true",
-            "false",
+            "io-ok", "true", "true", "true", "hello fs", "io-bytes", "true", "true", "true",
+            "true", "true", "false",
         ]
     );
 }
