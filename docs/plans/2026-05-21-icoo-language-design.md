@@ -1371,15 +1371,25 @@ toml.parse(text: String) -> Any
 
 ```text
 http_client.get(url: String) -> Map<String, Any>
+http_client.get(url: String, headers: Map<String, String>) -> Map<String, Any>
 http_client.post(url: String, body: String) -> Map<String, Any>
+http_client.post(url: String, body: String, headers: Map<String, String>) -> Map<String, Any>
 http_client.put(url: String, body: String) -> Map<String, Any>
+http_client.put(url: String, body: String, headers: Map<String, String>) -> Map<String, Any>
 http_client.delete(url: String) -> Map<String, Any>
+http_client.delete(url: String, headers: Map<String, String>) -> Map<String, Any>
 http_client.options(url: String) -> Map<String, Any>
+http_client.options(url: String, headers: Map<String, String>) -> Map<String, Any>
 http_client.stream_get(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_get(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 http_client.stream_post(url: String, body: String, handler: Function) -> Map<String, Any>
+http_client.stream_post(url: String, body: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 http_client.stream_put(url: String, body: String, handler: Function) -> Map<String, Any>
+http_client.stream_put(url: String, body: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 http_client.stream_delete(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_delete(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 http_client.stream_options(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_options(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 ```
 
 返回的 Map 至少包含：
@@ -1401,7 +1411,7 @@ fn on_chunk(chunk: String):
 let response = http_client.stream_get("http://127.0.0.1:8080/events", on_chunk)
 ```
 
-当前 HTTP client 只支持 `http://`，不支持 HTTPS、重定向和自定义请求头。流式接收当前以字符串形式交给 handler，二进制流式 API 后续再扩展。
+普通请求和流式请求都支持可选 `headers: Map<String, String>` 参数，header name/value 中不能包含 CR/LF，以避免请求头注入。当前 HTTP client 只支持 `http://`，不支持 HTTPS 和重定向。流式接收当前以字符串形式交给 handler，二进制流式 API 后续再扩展。
 
 `std.net.http.server` 模块：
 
@@ -1427,6 +1437,8 @@ app.listen(host: String, port: Int, max_requests: Int) -> Nil
 app.listen_with_workers(host: String, port: Int, max_requests: Int, workers: Int) -> Nil
 
 res.status(code: Int) -> WebInoResponse
+res.header(name: String, value: String) -> WebInoResponse
+res.content_type(value: String) -> WebInoResponse
 res.send(value: Any) -> Nil
 res.json(value: Any) -> Nil
 res.write(value: Any) -> WebInoResponse
@@ -1435,7 +1447,7 @@ res.download(path: String) -> Nil
 res.download(path: String, filename: String) -> Nil
 ```
 
-`std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。第一版使用精确路径匹配，handler 接收两个参数：
+`std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。路由优先精确路径匹配；当没有精确命中时，支持 `:name` 路径参数，例如 `/users/:id`。handler 接收两个参数：
 
 ```python
 fn home(req: Map<String, Any>, res: WebInoResponse):
@@ -1443,7 +1455,16 @@ fn home(req: Map<String, Any>, res: WebInoResponse):
     res.send("hello " + req.get("path"))
 ```
 
-`req` 是 Map，包含 `method`、`path`、`query`、`headers`、`body`、`form`、`files`。普通请求体保留在 `body`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`size`。当前上传内容以字符串形式进入运行时，适合配置、文本、小文件和 MVP 验证；二进制文件落盘、临时文件、上传大小限制和流式读取会在后续版本继续扩展。
+`req` 是 Map，包含 `method`、`path`、`query`、`query_params`、`params`、`headers`、`body`、`form`、`files`。`query_params` 是已解析的查询参数 Map，支持 `+` 空格和 `%xx` 解码；`params` 是路径参数 Map。普通请求体保留在 `body`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`size`。当前上传内容以字符串形式进入运行时，适合配置、文本、小文件和 MVP 验证；二进制文件落盘、临时文件、上传大小限制和流式读取会在后续版本继续扩展。
+
+```python
+fn user(req: Map<String, Any>, res: WebInoResponse):
+    let params = req.get("params")
+    let query = req.get("query_params")
+    res.send(params.get("id") + ":" + query.get("name"))
+
+app.get("/users/:id", user)
+```
 
 ```python
 fn upload(req: Map<String, Any>, res: WebInoResponse):
@@ -1451,7 +1472,7 @@ fn upload(req: Map<String, Any>, res: WebInoResponse):
     res.json({"filename": file.get("filename"), "size": file.get("size")})
 ```
 
-`res.send` 输出 `text/plain; charset=utf-8`，`res.json` 输出 `application/json; charset=utf-8`。`res.write` 会启动 `Transfer-Encoding: chunked` 的流式响应并立即写出 chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.send` 或 `res.json` 修改已经写出的响应头和主体。
+`res.header` 设置自定义响应头，`res.content_type` 覆盖 `Content-Type`；header name/value 中不能包含 CR/LF。`res.send` 默认输出 `text/plain; charset=utf-8`，`res.json` 默认输出 `application/json; charset=utf-8`，但不会覆盖显式调用 `res.content_type` 设置的类型。`res.write` 会启动 `Transfer-Encoding: chunked` 的流式响应并立即写出 chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.header`、`res.content_type`、`res.send` 或 `res.json` 修改已经写出的响应头和主体。
 
 ```python
 fn stream(req: Map<String, Any>, res: WebInoResponse):
@@ -1470,7 +1491,7 @@ fn export_file(req: Map<String, Any>, res: WebInoResponse):
 
 `listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
 
-`listen` 会并发接收和读取最多 `max_requests` 个连接，适合验证多个客户端同时连接的服务行为。内部使用固定 reader worker 池，默认 worker 数取当前机器可用并行度，避免每个请求都创建新线程。路由表按 `METHOD path` 建立哈希索引，避免路由数量增加时逐条扫描。`listen_with_workers` 允许显式传入 worker 数，用于压测调参。当前解释器中的 Icoo handler 仍在解释器线程内逐个执行，因为用户函数闭包和运行时环境还不是线程安全对象；后续可以在运行时对象可安全跨线程后扩展为真正的并发 handler、长生命周期服务、中间件、路径参数、路由组、错误处理和 async handler。
+`listen` 会并发接收和读取最多 `max_requests` 个连接，适合验证多个客户端同时连接的服务行为。内部使用固定 reader worker 池，默认 worker 数取当前机器可用并行度，避免每个请求都创建新线程。精确路由表按 `METHOD path` 建立哈希索引；参数路由仅在精确路由未命中时扫描。`listen_with_workers` 允许显式传入 worker 数，用于压测调参。当前解释器中的 Icoo handler 仍在解释器线程内逐个执行，因为用户函数闭包和运行时环境还不是线程安全对象；后续可以在运行时对象可安全跨线程后扩展为真正的并发 handler、长生命周期服务、中间件、路由组、错误处理和 async handler。
 
 `std.web.ino` 性能测试放在独立 ignored 测试中，避免常规 `cargo test` 因本地机器性能和端口调度产生波动。手动运行：
 
@@ -1479,6 +1500,33 @@ cargo test --test web_ino_perf -- --ignored --nocapture
 ```
 
 该测试会启动一个 `std.web.ino` 服务，并用多个本地 TCP 客户端同时请求，输出请求数、总耗时和吞吐量。
+
+### 标准库测试矩阵/模块单元
+
+标准库的实现按 `src/native_modules/*` 拆分后，测试也应从“大语言综合用例”中拆出一层轻量矩阵。`tests/language.rs` 继续覆盖端到端语义、错误信息和较完整的 HTTP/WebIno 场景；`tests/native_modules_matrix.rs` 只验证每个原生模块的登记、可导入性和一两个基础方法，避免把常规测试变成重复的长时间网络测试。
+
+当前标准库模块清单：
+
+| 模块文件 | 导入路径 | 类型名 | 测试重点 |
+| --- | --- | --- | --- |
+| `math.rs` | `std.math` | `Math` | 数值函数可导入并可调用。 |
+| `time.rs` | `std.time` | `Time` | 时间函数返回正整数。 |
+| `json.rs` | `std.json` | `Json` | `stringify`/`parse` 基础往返。 |
+| `yaml.rs` | `std.yaml` | `Yaml` | `parse` 和 `stringify` 基础值。 |
+| `toml.rs` | `std.toml` | `Toml` | `parse` 和 `stringify` 基础值。 |
+| `env.rs` | `std.env` | `Env` | 只读环境查询。 |
+| `io.rs` | `std.io` | `Io` | 输出通道与全局 `print` 一致。 |
+| `io_fs.rs` | `std.io.fs` | `IoFs` | 文本读写、追加、存在性和目录列表。 |
+| `os.rs` | `std.os` | `Os` | 平台、进程和环境只读信息。 |
+| `net_http_client.rs` | `std.net.http.client` | `NetHttpClient` | 可导入性、URL 校验、headers 参数和基础方法签名。 |
+| `net_http_server.rs` | `std.net.http.server` | `NetHttpServer` | 可导入性、端口校验和 `serve_once` 签名。 |
+| `web_ino.rs` | `std.web.ino` | `WebIno` | `App`/`create`、路由登记、响应头和参数路由。 |
+
+矩阵测试应保持以下边界：
+
+- 每个 `NativeModuleSpec` 必须在矩阵中出现，并至少有一个方法被覆盖。
+- 新增 `src/native_modules/*.rs` 时，同时更新模块清单和矩阵测试。
+- HTTP client/server 的完整联网、并发、上传、下载和流式能力继续放在端到端测试或 ignored 性能测试中；矩阵只保留短路径验证。
 
 事件循环对象方法：
 

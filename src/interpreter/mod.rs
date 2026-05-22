@@ -1103,7 +1103,14 @@ impl Interpreter {
             Value::WebInoResponse(_) => {
                 matches!(
                     name,
-                    "status" | "send" | "json" | "write" | "end" | "download"
+                    "status"
+                        | "header"
+                        | "content_type"
+                        | "send"
+                        | "json"
+                        | "write"
+                        | "end"
+                        | "download"
                 )
             }
             Value::Task(_) => matches!(name, "is_done" | "is_failed" | "result" | "cancel"),
@@ -1201,10 +1208,11 @@ impl Interpreter {
         method: &str,
         url: &str,
         body: &str,
+        headers: &HttpClientHeaders,
         handler: Value,
         span: Span,
     ) -> IcooResult<Value> {
-        let mut stream = open_http_client_request(method, url, body, span)?;
+        let mut stream = open_http_client_request(method, url, body, headers, span)?;
         let response = read_http_response_head(&mut stream, span)?;
         let chunk_count = if http_headers_transfer_chunked(&response.headers) {
             http_client_stream_chunked(&mut stream, response.body_prefix, span, |chunk| {
@@ -1269,6 +1277,7 @@ impl Interpreter {
                     web_ino_route_key(&method, &path),
                     WebInoRoute {
                         method,
+                        parameterized: web_ino_route_is_parameterized(&path),
                         path,
                         handler: args[1].clone(),
                     },
@@ -1382,6 +1391,41 @@ impl Interpreter {
                 }
                 Ok(Value::WebInoResponse(response))
             }
+            "header" => {
+                expect_arity(&args, 2, span)?;
+                let header_name = expect_string(&args[0], span)?;
+                let header_value = expect_string(&args[1], span)?;
+                web_ino_validate_header_name(&header_name, span)?;
+                web_ino_validate_header_value(&header_value, span)?;
+                {
+                    let mut response_ref = response.borrow_mut();
+                    if response_ref.headers_sent {
+                        return Err(IcooError::runtime(
+                            "cannot change HTTP headers after streaming has started",
+                            Some(span),
+                        ));
+                    }
+                    response_ref.headers.insert(header_name, header_value);
+                }
+                Ok(Value::WebInoResponse(response))
+            }
+            "content_type" => {
+                expect_arity(&args, 1, span)?;
+                let content_type = expect_string(&args[0], span)?;
+                web_ino_validate_header_value(&content_type, span)?;
+                {
+                    let mut response_ref = response.borrow_mut();
+                    if response_ref.headers_sent {
+                        return Err(IcooError::runtime(
+                            "cannot change HTTP content type after streaming has started",
+                            Some(span),
+                        ));
+                    }
+                    response_ref.content_type = content_type;
+                    response_ref.content_type_overridden = true;
+                }
+                Ok(Value::WebInoResponse(response))
+            }
             "send" => {
                 expect_arity(&args, 1, span)?;
                 let mut response_ref = response.borrow_mut();
@@ -1394,8 +1438,10 @@ impl Interpreter {
                 response_ref.body = args[0].display();
                 response_ref.body_bytes = None;
                 response_ref.chunks.clear();
-                response_ref.headers.clear();
-                response_ref.content_type = "text/plain; charset=utf-8".to_string();
+                response_ref.headers.remove("Content-Disposition");
+                if !response_ref.content_type_overridden {
+                    response_ref.content_type = "text/plain; charset=utf-8".to_string();
+                }
                 response_ref.sent = true;
                 response_ref.streaming = false;
                 Ok(Value::Nil)
@@ -1419,8 +1465,10 @@ impl Interpreter {
                 response_ref.body = body;
                 response_ref.body_bytes = None;
                 response_ref.chunks.clear();
-                response_ref.headers.clear();
-                response_ref.content_type = "application/json; charset=utf-8".to_string();
+                response_ref.headers.remove("Content-Disposition");
+                if !response_ref.content_type_overridden {
+                    response_ref.content_type = "application/json; charset=utf-8".to_string();
+                }
                 response_ref.sent = true;
                 response_ref.streaming = false;
                 Ok(Value::Nil)
@@ -1454,8 +1502,9 @@ impl Interpreter {
                 response_ref.body = String::new();
                 response_ref.body_bytes = Some(bytes);
                 response_ref.chunks.clear();
-                response_ref.content_type = web_ino_download_content_type(&path).to_string();
-                response_ref.headers.clear();
+                if !response_ref.content_type_overridden {
+                    response_ref.content_type = web_ino_download_content_type(&path).to_string();
+                }
                 response_ref.headers.insert(
                     "Content-Disposition".to_string(),
                     format!(
@@ -1593,6 +1642,7 @@ impl Interpreter {
                         body_bytes: None,
                         chunks: Vec::new(),
                         content_type: "text/plain; charset=utf-8".to_string(),
+                        content_type_overridden: false,
                         headers: HashMap::new(),
                         sent: true,
                         streaming: false,
@@ -1632,12 +1682,11 @@ impl Interpreter {
         stream: &mut std::net::TcpStream,
         span: Span,
     ) -> IcooResult<()> {
-        let request = parse_web_ino_request(request_text, span)?;
-        let route = app
-            .borrow()
-            .routes
-            .get(&web_ino_route_key(&request.method, &request.path))
-            .cloned();
+        let mut request = parse_web_ino_request(request_text, span)?;
+        let route = {
+            let app_ref = app.borrow();
+            web_ino_match_route(&app_ref, &mut request)
+        };
         let writer = stream.try_clone().map_err(|err| {
             IcooError::runtime(
                 format!("web.ino response stream clone failed: {}", err),
@@ -1650,6 +1699,7 @@ impl Interpreter {
             body_bytes: None,
             chunks: Vec::new(),
             content_type: "text/plain; charset=utf-8".to_string(),
+            content_type_overridden: false,
             headers: HashMap::new(),
             sent: false,
             streaming: false,
@@ -2799,6 +2849,8 @@ struct ParsedHttpResponseHead {
     body_prefix: Vec<u8>,
 }
 
+pub(crate) type HttpClientHeaders = Vec<(String, String)>;
+
 fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(IcooError::runtime(
@@ -2831,9 +2883,11 @@ fn open_http_client_request(
     method: &str,
     url: &str,
     body: &str,
+    headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<std::net::TcpStream> {
     let parsed = parse_http_url(url, span)?;
+    let custom_headers = http_client_headers_text(headers, span)?;
     let mut stream =
         std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
             IcooError::runtime(
@@ -2846,23 +2900,41 @@ fn open_http_client_request(
         .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
     let request = if http_method_has_request_body(method) {
         format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n{}\r\n{}",
             method,
             parsed.path,
             parsed.host,
             body.as_bytes().len(),
+            custom_headers,
             body
         )
     } else {
         format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            method, parsed.path, parsed.host
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}\r\n",
+            method, parsed.path, parsed.host, custom_headers
         )
     };
     std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
         IcooError::runtime(format!("http client write failed: {}", err), Some(span))
     })?;
     Ok(stream)
+}
+
+fn http_client_headers_text(headers: &HttpClientHeaders, span: Span) -> IcooResult<String> {
+    let mut text = String::new();
+    for (name, value) in headers {
+        if name.contains(['\r', '\n']) || value.contains(['\r', '\n']) {
+            return Err(IcooError::runtime(
+                "HTTP header names and values cannot contain CR or LF",
+                Some(span),
+            ));
+        }
+        text.push_str(name);
+        text.push_str(": ");
+        text.push_str(value);
+        text.push_str("\r\n");
+    }
+    Ok(text)
 }
 
 fn http_method_has_request_body(method: &str) -> bool {
@@ -2884,9 +2956,10 @@ pub(crate) fn http_client_request(
     method: &str,
     url: &str,
     body: &str,
+    headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<Value> {
-    let mut stream = open_http_client_request(method, url, body, span)?;
+    let mut stream = open_http_client_request(method, url, body, headers, span)?;
     let mut response = String::new();
     std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
         IcooError::runtime(format!("http client read failed: {}", err), Some(span))
@@ -3212,6 +3285,8 @@ struct ParsedWebInoRequest {
     method: String,
     path: String,
     query: String,
+    query_params: HashMap<String, Value>,
+    params: HashMap<String, Value>,
     headers: HashMap<String, Value>,
     body: String,
     form: HashMap<String, Value>,
@@ -3303,7 +3378,9 @@ fn parse_web_ino_request(request: &str, span: Span) -> IcooResult<ParsedWebInoRe
     Ok(ParsedWebInoRequest {
         method,
         path,
+        query_params: parse_web_ino_query_params(&query),
         query,
+        params: HashMap::new(),
         headers,
         body: body.to_string(),
         form,
@@ -3316,6 +3393,14 @@ fn web_ino_request_value(request: &ParsedWebInoRequest) -> Value {
     map.insert("method".to_string(), Value::String(request.method.clone()));
     map.insert("path".to_string(), Value::String(request.path.clone()));
     map.insert("query".to_string(), Value::String(request.query.clone()));
+    map.insert(
+        "query_params".to_string(),
+        Value::Map(Rc::new(RefCell::new(request.query_params.clone()))),
+    );
+    map.insert(
+        "params".to_string(),
+        Value::Map(Rc::new(RefCell::new(request.params.clone()))),
+    );
     map.insert(
         "headers".to_string(),
         Value::Map(Rc::new(RefCell::new(request.headers.clone()))),
@@ -3426,12 +3511,114 @@ fn trim_header_quotes(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+fn parse_web_ino_query_params(query: &str) -> HashMap<String, Value> {
+    let mut params = HashMap::new();
+    if query.is_empty() {
+        return params;
+    }
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        params.insert(
+            percent_decode_form_component(name),
+            Value::String(percent_decode_form_component(value)),
+        );
+    }
+    params
+}
+
+fn percent_decode_form_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &value[index + 1..index + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    index += 3;
+                } else {
+                    decoded.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
 fn web_ino_route_key(method: &str, path: &str) -> String {
     let mut key = String::with_capacity(method.len() + path.len() + 1);
     key.push_str(method);
     key.push(' ');
     key.push_str(path);
     key
+}
+
+fn web_ino_route_is_parameterized(path: &str) -> bool {
+    web_ino_path_segments(path)
+        .iter()
+        .any(|segment| segment.starts_with(':') && segment.len() > 1)
+}
+
+fn web_ino_match_route(app: &WebInoApp, request: &mut ParsedWebInoRequest) -> Option<WebInoRoute> {
+    if let Some(route) = app
+        .routes
+        .get(&web_ino_route_key(&request.method, &request.path))
+        .cloned()
+    {
+        request.params.clear();
+        return Some(route);
+    }
+    app.routes
+        .values()
+        .filter(|route| route.method == request.method && route.parameterized)
+        .find_map(|route| {
+            let params = web_ino_route_params(&route.path, &request.path)?;
+            request.params = params;
+            Some(route.clone())
+        })
+}
+
+fn web_ino_route_params(route_path: &str, request_path: &str) -> Option<HashMap<String, Value>> {
+    let route_segments = web_ino_path_segments(route_path);
+    let request_segments = web_ino_path_segments(request_path);
+    if route_segments.len() != request_segments.len() {
+        return None;
+    }
+    let mut params = HashMap::new();
+    for (route_segment, request_segment) in route_segments.iter().zip(request_segments.iter()) {
+        if let Some(name) = route_segment.strip_prefix(':') {
+            if name.is_empty() {
+                return None;
+            }
+            params.insert(
+                name.to_string(),
+                Value::String(percent_decode_form_component(request_segment)),
+            );
+        } else if route_segment != request_segment {
+            return None;
+        }
+    }
+    Some(params)
+}
+
+fn web_ino_path_segments(path: &str) -> Vec<&str> {
+    path.trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
 }
 
 fn web_ino_write_stream_chunk(
@@ -3576,6 +3763,26 @@ fn web_ino_escape_header_value(value: &str) -> String {
         .replace(['\r', '\n'], "_")
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+}
+
+fn web_ino_validate_header_name(name: &str, span: Span) -> IcooResult<()> {
+    if name.contains(['\r', '\n']) {
+        return Err(IcooError::runtime(
+            "HTTP header name cannot contain CR or LF",
+            Some(span),
+        ));
+    }
+    Ok(())
+}
+
+fn web_ino_validate_header_value(value: &str, span: Span) -> IcooResult<()> {
+    if value.contains(['\r', '\n']) {
+        return Err(IcooError::runtime(
+            "HTTP header value cannot contain CR or LF",
+            Some(span),
+        ));
+    }
+    Ok(())
 }
 
 fn http_status_text(status: i64) -> &'static str {

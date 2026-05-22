@@ -986,7 +986,9 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("WebInoApp", "listen_once" | "listen" | "listen_with_workers") => {
             Some(TypeInfo::known("Nil"))
         }
-        ("WebInoResponse", "status" | "write") => Some(TypeInfo::known("WebInoResponse")),
+        ("WebInoResponse", "status" | "header" | "content_type" | "write") => {
+            Some(TypeInfo::known("WebInoResponse"))
+        }
         ("WebInoResponse", "send" | "json" | "end" | "download") => Some(TypeInfo::known("Nil")),
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
@@ -1149,26 +1151,31 @@ fn native_method_sig(
             return_type,
         )),
         ("NetHttpClient", "get" | "delete" | "options") => Some(native_sig(
-            NativeArity::Exact(1),
-            vec![Some("String")],
+            NativeArity::Range { min: 1, max: 2 },
+            vec![Some("String"), Some("Map")],
             None,
             return_type,
         )),
         ("NetHttpClient", "post" | "put") => Some(native_sig(
-            NativeArity::Exact(2),
-            vec![Some("String"), Some("String")],
+            NativeArity::Range { min: 2, max: 3 },
+            vec![Some("String"), Some("String"), Some("Map")],
             None,
             return_type,
         )),
         ("NetHttpClient", "stream_get" | "stream_delete" | "stream_options") => Some(native_sig(
-            NativeArity::Exact(2),
-            vec![Some("String"), Some("Function")],
+            NativeArity::Range { min: 2, max: 3 },
+            vec![Some("String"), Some("Any"), Some("Function")],
             None,
             return_type,
         )),
         ("NetHttpClient", "stream_post" | "stream_put") => Some(native_sig(
-            NativeArity::Exact(3),
-            vec![Some("String"), Some("String"), Some("Function")],
+            NativeArity::Range { min: 3, max: 4 },
+            vec![
+                Some("String"),
+                Some("String"),
+                Some("Any"),
+                Some("Function"),
+            ],
             None,
             return_type,
         )),
@@ -1208,6 +1215,18 @@ fn native_method_sig(
         ("WebInoResponse", "status") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Int")],
+            None,
+            return_type,
+        )),
+        ("WebInoResponse", "header") => Some(native_sig(
+            NativeArity::Exact(2),
+            vec![Some("String"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("WebInoResponse", "content_type") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
             None,
             return_type,
         )),

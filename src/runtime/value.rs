@@ -385,6 +385,7 @@ pub struct WebInoApp {
 pub struct WebInoRoute {
     pub method: String,
     pub path: String,
+    pub parameterized: bool,
     pub handler: Value,
 }
 
@@ -395,6 +396,7 @@ pub struct WebInoResponse {
     pub body_bytes: Option<Vec<u8>>,
     pub chunks: Vec<String>,
     pub content_type: String,
+    pub content_type_overridden: bool,
     pub headers: HashMap<String, String>,
     pub sent: bool,
     pub streaming: bool,
