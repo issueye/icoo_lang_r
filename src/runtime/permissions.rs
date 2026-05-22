@@ -1,3 +1,6 @@
+use crate::error::{IcooError, IcooResult};
+use crate::lexer::token::Span;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimePermissions {
     pub fs_read: PermissionRule,
@@ -67,6 +70,34 @@ impl RuntimePermissions {
     pub fn can_listen_net(&self) -> bool {
         self.net_listen.allows()
     }
+
+    pub fn check_fs_read(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_read_fs(), "fs.read", span)
+    }
+
+    pub fn check_fs_write(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_write_fs(), "fs.write", span)
+    }
+
+    pub fn check_fs_list(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_list_fs(), "fs.list", span)
+    }
+
+    pub fn check_env_read(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_read_env(), "env.read", span)
+    }
+
+    pub fn check_os_info(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_read_os_info(), "os.info", span)
+    }
+
+    pub fn check_net_connect(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_connect_net(), "net.connect", span)
+    }
+
+    pub fn check_net_listen(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_listen_net(), "net.listen", span)
+    }
 }
 
 impl Default for RuntimePermissions {
@@ -78,5 +109,16 @@ impl Default for RuntimePermissions {
 impl PermissionRule {
     pub fn allows(self) -> bool {
         matches!(self, Self::AllowAll)
+    }
+}
+
+fn check_permission(allowed: bool, capability: &str, span: Span) -> IcooResult<()> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(IcooError::runtime(
+            format!("permission denied: {}", capability),
+            Some(span),
+        ))
     }
 }

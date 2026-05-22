@@ -267,6 +267,7 @@ impl Interpreter {
                 } else {
                     web_ino_download_filename(&path)
                 };
+                self.permissions().check_fs_read(span)?;
                 let bytes = std::fs::read(&path).map_err(|err| {
                     IcooError::runtime(
                         format!("web response download() failed: {}", err),
@@ -329,6 +330,7 @@ impl Interpreter {
         port: u16,
         span: Span,
     ) -> IcooResult<()> {
+        self.permissions().check_net_listen(span)?;
         let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
             IcooError::runtime(
                 format!("web.ino listen_once bind failed: {}", err),
@@ -355,6 +357,7 @@ impl Interpreter {
         workers: usize,
         span: Span,
     ) -> IcooResult<()> {
+        self.permissions().check_net_listen(span)?;
         let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
             IcooError::runtime(format!("web.ino listen bind failed: {}", err), Some(span))
         })?;

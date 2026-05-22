@@ -11,11 +11,31 @@ use error::IcooError;
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
 use std::path::Path;
 
-pub fn run_source(source: &str) -> Result<(), IcooError> {
+fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {
     let tokens = lexer::lex(source)?;
     let program = parser::parse(tokens)?;
     resolver::resolve(&program)?;
     typechecker::check(&program)?;
+    Ok(program)
+}
+
+pub fn check_source(source: &str) -> Result<(), IcooError> {
+    parse_and_check(source).map(|_| ())
+}
+
+pub fn check_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
+    let path = path.as_ref();
+    let source = std::fs::read_to_string(path).map_err(|err| {
+        IcooError::runtime(
+            format!("failed to read file '{}': {}", path.display(), err),
+            None,
+        )
+    })?;
+    check_source(&source)
+}
+
+pub fn run_source(source: &str) -> Result<(), IcooError> {
+    let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::new();
     interpreter.interpret(&program)
 }
@@ -24,10 +44,7 @@ pub fn run_source_with_permissions(
     source: &str,
     permissions: RuntimePermissions,
 ) -> Result<(), IcooError> {
-    let tokens = lexer::lex(source)?;
-    let program = parser::parse(tokens)?;
-    resolver::resolve(&program)?;
-    typechecker::check(&program)?;
+    let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_permissions(permissions);
     interpreter.interpret(&program)
 }
@@ -36,10 +53,7 @@ pub fn run_source_with_output<F>(source: &str, output: F) -> Result<(), IcooErro
 where
     F: FnMut(String) + 'static,
 {
-    let tokens = lexer::lex(source)?;
-    let program = parser::parse(tokens)?;
-    resolver::resolve(&program)?;
-    typechecker::check(&program)?;
+    let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_output(output);
     interpreter.interpret(&program)
 }

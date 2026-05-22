@@ -1,6 +1,6 @@
 use super::NativeModuleSpec;
 use crate::error::IcooResult;
-use crate::interpreter::{expect_arity, expect_string};
+use crate::interpreter::{expect_arity, expect_string, Interpreter};
 use crate::lexer::token::Span;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
@@ -13,14 +13,25 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     methods: &["cwd", "args", "get", "has"],
 };
 
-pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {
-    Some(dispatch(name, args, span))
+pub(crate) fn call(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> Option<IcooResult<Value>> {
+    Some(dispatch(runtime, name, args, span))
 }
 
-fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
+fn dispatch(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> IcooResult<Value> {
     match name {
         "cwd" => {
             expect_arity(&args, 0, span)?;
+            runtime.permissions().check_os_info(span)?;
             std::env::current_dir()
                 .map(|path| Value::String(path.to_string_lossy().into_owned()))
                 .map_err(|err| {
@@ -32,6 +43,7 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
         }
         "args" => {
             expect_arity(&args, 0, span)?;
+            runtime.permissions().check_os_info(span)?;
             Ok(Value::Array(Rc::new(RefCell::new(
                 std::env::args().map(Value::String).collect(),
             ))))
@@ -39,11 +51,13 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
         "get" => {
             expect_arity(&args, 1, span)?;
             let name = expect_string(&args[0], span)?;
+            runtime.permissions().check_env_read(span)?;
             Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
         }
         "has" => {
             expect_arity(&args, 1, span)?;
             let name = expect_string(&args[0], span)?;
+            runtime.permissions().check_env_read(span)?;
             Ok(Value::Bool(std::env::var_os(name).is_some()))
         }
         _ => unreachable!("native module method should be registered before dispatch"),

@@ -1,6 +1,6 @@
 use super::NativeModuleSpec;
 use crate::error::{IcooError, IcooResult};
-use crate::interpreter::{expect_arity, expect_string};
+use crate::interpreter::{expect_arity, expect_string, Interpreter};
 use crate::lexer::token::Span;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
@@ -22,30 +22,44 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     ],
 };
 
-pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {
-    Some(dispatch(name, args, span))
+pub(crate) fn call(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> Option<IcooResult<Value>> {
+    Some(dispatch(runtime, name, args, span))
 }
 
-fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
+fn dispatch(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> IcooResult<Value> {
     match name {
         "exists" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_read(span)?;
             Ok(Value::Bool(std::path::Path::new(&path).exists()))
         }
         "is_file" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_read(span)?;
             Ok(Value::Bool(std::path::Path::new(&path).is_file()))
         }
         "is_dir" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_read(span)?;
             Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
         }
         "read_text" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_read(span)?;
             std::fs::read_to_string(&path)
                 .map(Value::String)
                 .map_err(|err| {
@@ -56,6 +70,7 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_string(&args[1], span)?;
+            runtime.permissions().check_fs_write(span)?;
             std::fs::write(&path, content)
                 .map(|_| Value::Nil)
                 .map_err(|err| {
@@ -66,6 +81,7 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_string(&args[1], span)?;
+            runtime.permissions().check_fs_write(span)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -79,6 +95,7 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
         "list_dir" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
+            runtime.permissions().check_fs_list(span)?;
             let mut entries = Vec::new();
             for entry in std::fs::read_dir(&path).map_err(|err| {
                 IcooError::runtime(format!("io.fs.list_dir() failed: {}", err), Some(span))

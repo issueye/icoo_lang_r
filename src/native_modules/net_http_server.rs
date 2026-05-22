@@ -1,6 +1,8 @@
 use super::NativeModuleSpec;
 use crate::error::{IcooError, IcooResult};
-use crate::interpreter::{expect_arity, expect_int, expect_string, http_server_serve_once};
+use crate::interpreter::{
+    expect_arity, expect_int, expect_string, http_server_serve_once, Interpreter,
+};
 use crate::lexer::token::Span;
 use crate::runtime::value::Value;
 
@@ -11,11 +13,21 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     methods: &["serve_once"],
 };
 
-pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {
-    Some(dispatch(name, args, span))
+pub(crate) fn call(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> Option<IcooResult<Value>> {
+    Some(dispatch(runtime, name, args, span))
 }
 
-fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
+fn dispatch(
+    runtime: &mut Interpreter,
+    name: &str,
+    args: Vec<Value>,
+    span: Span,
+) -> IcooResult<Value> {
     match name {
         "serve_once" => {
             expect_arity(&args, 3, span)?;
@@ -28,7 +40,7 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
                 ));
             }
             let body = expect_string(&args[2], span)?;
-            http_server_serve_once(&host, port as u16, &body, span)?;
+            http_server_serve_once(runtime.permissions(), &host, port as u16, &body, span)?;
             Ok(Value::Nil)
         }
         _ => unreachable!("native module method should be registered before dispatch"),

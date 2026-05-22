@@ -2,6 +2,7 @@ use super::http_common::{ensure_http_header_name_value_no_crlf, find_http_body_s
 use super::Interpreter;
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -51,6 +52,7 @@ fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
 }
 
 fn open_http_client_request(
+    permissions: &RuntimePermissions,
     method: &str,
     url: &str,
     body: &str,
@@ -59,6 +61,7 @@ fn open_http_client_request(
 ) -> IcooResult<std::net::TcpStream> {
     let parsed = parse_http_url(url, span)?;
     let custom_headers = http_client_headers_text(headers, span)?;
+    permissions.check_net_connect(span)?;
     let mut stream =
         std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
             IcooError::runtime(
@@ -119,13 +122,14 @@ pub(crate) fn http_stream_method_name(method_name: &str) -> &'static str {
 }
 
 pub(crate) fn http_client_request(
+    permissions: &RuntimePermissions,
     method: &str,
     url: &str,
     body: &str,
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<Value> {
-    let mut stream = open_http_client_request(method, url, body, headers, span)?;
+    let mut stream = open_http_client_request(permissions, method, url, body, headers, span)?;
     let mut response = String::new();
     std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
         IcooError::runtime(format!("http client read failed: {}", err), Some(span))
@@ -143,7 +147,8 @@ impl Interpreter {
         handler: Value,
         span: Span,
     ) -> IcooResult<Value> {
-        let mut stream = open_http_client_request(method, url, body, headers, span)?;
+        let mut stream =
+            open_http_client_request(&self.permissions, method, url, body, headers, span)?;
         let response = read_http_response_head(&mut stream, span)?;
         let chunk_count = if http_headers_transfer_chunked(&response.headers) {
             http_client_stream_chunked(&mut stream, response.body_prefix, span, |chunk| {

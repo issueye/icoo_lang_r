@@ -44,20 +44,34 @@ fn dispatch(
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
             let headers = optional_headers(&args, 1, span)?;
-            http_client_request("GET", &url, "", &headers, span)
+            http_client_request(runtime.permissions(), "GET", &url, "", &headers, span)
         }
         "post" | "put" => {
             expect_arity_range(&args, 2, 3, span)?;
             let url = expect_string(&args[0], span)?;
             let body = expect_string(&args[1], span)?;
             let headers = optional_headers(&args, 2, span)?;
-            http_client_request(&name.to_ascii_uppercase(), &url, &body, &headers, span)
+            http_client_request(
+                runtime.permissions(),
+                &name.to_ascii_uppercase(),
+                &url,
+                &body,
+                &headers,
+                span,
+            )
         }
         "delete" | "options" => {
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
             let headers = optional_headers(&args, 1, span)?;
-            http_client_request(&name.to_ascii_uppercase(), &url, "", &headers, span)
+            http_client_request(
+                runtime.permissions(),
+                &name.to_ascii_uppercase(),
+                &url,
+                "",
+                &headers,
+                span,
+            )
         }
         "stream_get" => {
             expect_arity_range(&args, 2, 3, span)?;
