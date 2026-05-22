@@ -1,3 +1,5 @@
+pub(crate) mod buffer;
+pub(crate) mod bytes;
 pub(crate) mod env;
 pub(crate) mod io;
 pub(crate) mod io_fs;
@@ -39,6 +41,8 @@ pub enum NativeAritySpec {
 }
 
 pub const SPECS: &[NativeModuleSpec] = &[
+    bytes::SPEC,
+    buffer::SPEC,
     math::SPEC,
     time::SPEC,
     json::SPEC,
@@ -103,6 +107,8 @@ pub(crate) fn call(
 ) -> Option<IcooResult<Value>> {
     match kind {
         "math" => math::call(name, args, span),
+        "Bytes" => bytes::call(name, args, span),
+        "Buffer" => buffer::call(name, args, span),
         "time" => time::call(name, args, span),
         "json" => json::call(name, args, span),
         "yaml" => yaml::call(name, args, span),

@@ -29,6 +29,8 @@ fn native_module_registry_matches_current_standard_library_surface() {
     assert_eq!(
         modules.iter().map(|module| module.0).collect::<Vec<_>>(),
         vec![
+            "Bytes",
+            "Buffer",
             "std.math",
             "std.time",
             "std.json",
@@ -45,7 +47,7 @@ fn native_module_registry_matches_current_standard_library_surface() {
     );
 
     for (import_path, kind, type_name, methods) in modules {
-        assert!(import_path.starts_with("std."));
+        assert!(import_path.starts_with("std.") || matches!(import_path, "Bytes" | "Buffer"));
         assert!(!kind.is_empty(), "{import_path} missing kind");
         assert!(!type_name.is_empty(), "{import_path} missing type name");
         assert!(!methods.is_empty(), "{import_path} missing methods");

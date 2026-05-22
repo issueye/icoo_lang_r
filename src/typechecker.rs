@@ -906,6 +906,8 @@ fn native_globals() -> HashMap<String, TypeInfo> {
         ("time", "Time"),
         ("json", "Json"),
         ("env", "Env"),
+        ("Bytes", "BytesFactory"),
+        ("Buffer", "BufferFactory"),
     ]
     .into_iter()
     .map(|(name, ty)| (name.to_string(), TypeInfo::known(ty)))
@@ -1003,10 +1005,12 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("WebInoApp", "listen_once" | "listen" | "listen_with_workers") => {
             Some(TypeInfo::known("Nil"))
         }
-        ("WebInoResponse", "status" | "header" | "content_type" | "write") => {
+        ("WebInoResponse", "status" | "header" | "content_type" | "write" | "write_bytes") => {
             Some(TypeInfo::known("WebInoResponse"))
         }
-        ("WebInoResponse", "send" | "json" | "end" | "download") => Some(TypeInfo::known("Nil")),
+        ("WebInoResponse", "send" | "send_bytes" | "json" | "end" | "download") => {
+            Some(TypeInfo::known("Nil"))
+        }
         ("Array", "len" | "index_of" | "unshift" | "find_index") => Some(TypeInfo::known("Int")),
         ("Array", "is_empty" | "includes" | "some" | "every") => Some(TypeInfo::known("Bool")),
         ("Array", "push" | "for_each") => Some(TypeInfo::known("Nil")),
@@ -1027,7 +1031,17 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Bytes", "len") => Some(TypeInfo::known("Int")),
         ("Bytes", "is_empty" | "equals") => Some(TypeInfo::known("Bool")),
         ("Bytes", "slice" | "concat") => Some(TypeInfo::known("Bytes")),
-        ("Bytes", "to_hex") => Some(TypeInfo::known("String")),
+        ("Bytes", "to_hex" | "to_base64") => Some(TypeInfo::known("String")),
+        ("BytesFactory", "empty" | "from_hex" | "from_base64" | "from_string") => {
+            Some(TypeInfo::known("Bytes"))
+        }
+        ("BufferFactory", "new" | "from_bytes" | "from_string") => Some(TypeInfo::known("Buffer")),
+        ("Buffer", "len") => Some(TypeInfo::known("Int")),
+        ("Buffer", "is_empty" | "equals") => Some(TypeInfo::known("Bool")),
+        ("Buffer", "append" | "append_string") => Some(TypeInfo::known("Buffer")),
+        ("Buffer", "slice" | "to_bytes") => Some(TypeInfo::known("Bytes")),
+        ("Buffer", "clear") => Some(TypeInfo::known("Nil")),
+        ("Buffer", "to_hex" | "to_base64") => Some(TypeInfo::known("String")),
         _ => None,
     }
 }
@@ -1052,7 +1066,7 @@ fn native_method_sig_for_receiver(
     method_name: &str,
 ) -> Option<NativeMethodSig> {
     let return_type = native_method_return_for_receiver(receiver, method_name)?;
-    if receiver.name() == Some("Bytes") && method_name == "to_string" {
+    if matches!(receiver.name(), Some("Bytes" | "Buffer")) && method_name == "to_string" {
         return Some(native_sig(
             NativeArity::Range { min: 0, max: 1 },
             vec![Some("String")],
@@ -1320,6 +1334,18 @@ fn native_method_sig(
             None,
             return_type,
         )),
+        ("WebInoResponse", "send_bytes") => Some(native_sig(
+            NativeArity::Range { min: 1, max: 2 },
+            vec![Some("Bytes"), Some("String")],
+            None,
+            return_type,
+        )),
+        ("WebInoResponse", "write_bytes") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Bytes")],
+            None,
+            return_type,
+        )),
         ("WebInoResponse", "end") => {
             Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
         }
@@ -1405,7 +1431,7 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("Bytes", "len" | "is_empty" | "to_hex") => {
+        ("Bytes", "len" | "is_empty" | "to_hex" | "to_base64") => {
             Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
         }
         ("Bytes", "to_string") => Some(native_sig(
@@ -1423,6 +1449,33 @@ fn native_method_sig(
         ("Bytes", "concat" | "equals") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Bytes")],
+            None,
+            return_type,
+        )),
+        ("Buffer", "len" | "is_empty" | "to_bytes" | "clear" | "to_hex" | "to_base64") => {
+            Some(native_sig(NativeArity::Exact(0), vec![], None, return_type))
+        }
+        ("Buffer", "append") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Bytes")],
+            None,
+            return_type,
+        )),
+        ("Buffer", "append_string") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("String")],
+            None,
+            return_type,
+        )),
+        ("Buffer", "slice") => Some(native_sig(
+            NativeArity::Range { min: 1, max: 2 },
+            vec![Some("Int"), Some("Int")],
+            None,
+            return_type,
+        )),
+        ("Buffer", "equals") => Some(native_sig(
+            NativeArity::Exact(1),
+            vec![Some("Any")],
             None,
             return_type,
         )),

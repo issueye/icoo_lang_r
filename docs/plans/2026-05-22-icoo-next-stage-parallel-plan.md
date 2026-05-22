@@ -2,6 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+**Status:** 2026-05-22 校准版。本文保留原始 worker 分工，作为历史执行记录和拆分参考；当前待办以本文开头的状态更新、推荐执行顺序和最小下一步为准。
+
 **Goal:** 把 Icoo 从“功能持续堆叠的 MVP”推进到“结构可维护、权限边界清晰、Web/async 语义更稳定”的下一阶段。
 
 **Architecture:** 先做低风险结构拆分，保持现有语言行为不变；再在拆分后的边界上补 WebIno、权限模型和 async 语义。短期继续使用当前 AST 解释器和协程指令层，不立即切换到字节码 VM，但同步输出 VM 设计草案。
@@ -12,16 +14,28 @@
 
 ## 1. 当前基线
 
-- 最新提交：`feb7078 Add WebIno params and HTTP header support`
-- 仓库状态：计划生成前 `git status --short` 为空
-- 已通过测试：
-  - `cargo test`
-  - `cargo test --test web_ino_perf -- --ignored --nocapture`
+- 当前仓库状态：校准时 `git status --short` 为空。
+- 当前已通过测试：`cargo test`。
+- 已完成原计划中的关键工作：
+  - Worker A：HTTP client/server runtime helper 已拆分到 `src/interpreter/http_*.rs`。
+  - Worker B：WebIno runtime 已拆分到 `src/interpreter/web_ino.rs`，路由和响应头测试已补强。
+  - Worker C/D：权限模型已实现并接入 fs/env/os/net/WebIno download/listen。
+  - Worker E：async/EventLoop 的 `run_until`、取消唤醒、跨 loop 校验和复杂 `await` 限制已加固。
+  - Worker G：标准库签名元数据已引入并被类型检查使用。
+  - Worker H：VM 设计文档和 backend equivalence 测试骨架已落地，且已有同步子集 VM 原型。
+  - 当前校准轮：模块加载、相对导入和 export 收集已拆到 `src/interpreter/modules.rs`。
+  - 当前校准轮：函数调用和 native call 分发已拆到 `src/interpreter/calls.rs`。
+  - 当前校准轮：类声明、实例创建、字段访问和 `super` 查找已拆到 `src/interpreter/classes.rs`。
+  - 当前校准轮：EventLoop/Task 调度、timer/awaiter 唤醒和协程恢复执行已拆到 `src/interpreter/tasks.rs`。
+  - 当前校准轮：String/Bytes/Array/Map 内置方法已拆到 `src/interpreter/methods.rs`。
+  - 当前校准轮：核心解释执行和表达式求值已拆到 `src/interpreter/eval.rs`。
+  - 当前校准轮：协程指令编译已拆到 `src/interpreter/coroutines.rs`。
+  - 当前校准轮：类型检查/值比较、参数提取和格式转换 helper 已拆到 `src/interpreter/types.rs`、`src/interpreter/args.rs`、`src/interpreter/formats.rs`。
 - 当前重点风险：
-  - `src/interpreter/mod.rs` 同时承载核心解释执行、HTTP client、WebIno、EventLoop/Task 调度和大量 helper。
-  - 标准库实现、类型签名和文档 API 清单仍存在重复维护。
-  - `std.io.fs`、`std.os`、`std.env`、网络和 `res.download()` 暂无统一权限边界。
-  - 当前 Tokio 后端主要用于阻塞 sleep，并不代表 Icoo 用户代码已经多线程执行。
+  - `src/interpreter/mod.rs` 已收敛为解释器构造、native 安装和模块接线，后续需要防止新功能重新堆回入口文件。
+  - WebIno 和 HTTP 已拆出，Bytes/Buffer 最小闭环和 WebIno request/response 二进制字段已完成；大小限制和 bytes streaming 专用 API 还未完整闭环。
+  - 当前权限模型是 coarse-grained allow/deny，还没有路径、host、port 等细粒度规则。
+  - 当前 Tokio 后端主要用于阻塞 sleep/timer，并不代表 Icoo 用户代码已经完整多线程执行。
 
 ## 2. 架构决策
 
@@ -175,7 +189,7 @@ cargo test supports_std_web_ino
    - `web_ino_listen_once`
    - `web_ino_listen`
    - `web_ino_handle_request`
-   - `read_web_ino_request_text`
+   - `read_web_ino_request_bytes`
    - `parse_web_ino_request`
    - multipart/form/query/params helper
    - stream/write/end/download helper
@@ -568,35 +582,28 @@ git commit -m "Document bytecode VM migration path"
 
 ## 5. 推荐执行顺序
 
-### 第一批：降低冲突和风险
+### 当前第一批：解释器复杂度守护
 
-可以并行：
+Worker A/B/C/D/E/G/H 的原始目标大多已经完成。当前校准轮也已完成模块、调用、类、任务、内置方法、执行/eval、协程编译和共享 helper 拆分。
 
-- Worker A：HTTP 拆分
-- Worker C：权限骨架
-- Worker H：VM 设计文档
+建议顺序：
 
-主线程职责：
+1. 维护解释器边界：
+   - 新 runtime 能力进入对应子模块。
+   - `mod.rs` 只保留解释器结构、构造、native 安装和 re-export。
+   - 结构调整后跑专项测试和完整 `cargo test`。
 
-- 只处理 `src/interpreter/mod.rs` 接线冲突。
-- 每个 worker 合并后跑 `cargo test`。
+### 当前第二批：补二进制边界
 
-### 第二批：WebIno 和 async 语义
+- 已完成 `Buffer` 类型最小闭环。
+- 已完成 Base64 方法。
+- 已完成 WebIno `body_bytes`、multipart `content_bytes`、`send_bytes`、`write_bytes`。
+- 补 HTTP/WebIno body 和 chunk 大小限制。
 
-Worker A 完成后：
+### 当前第三批：权限和 VM
 
-- Worker B：WebIno 拆分
-- Worker E：async/EventLoop 语义加固
-
-注意：B 和 E 都会碰 `src/interpreter/mod.rs`，如果 A 已把代码拆开，冲突会小很多；否则不要并行执行。
-
-### 第三批：能力增强
-
-Worker B/C 完成后：
-
-- Worker D：权限接入各标准库
-- Worker F：WebIno middleware/错误处理/请求限制
-- Worker G：标准库签名元数据收敛
+- 权限模型从 allow/deny 扩展到路径、host、port 和环境变量 key 规则。
+- VM 保持实验 backend，下一步只扩展函数调用和 frame，不切主路径。
 
 ## 6. 每日验收标准
 
@@ -626,10 +633,10 @@ cargo test --test web_ino_perf -- --ignored --nocapture
 
 ## 8. 最小下一步
 
-建议下一轮直接启动三名 worker：
+建议下一轮直接做一个低冲突任务：
 
-1. Worker A：HTTP runtime 拆分。
-2. Worker C：权限模型骨架。
-3. Worker H：VM 设计文档和 backend equivalence 测试骨架。
+1. 补 HTTP/WebIno body 和 chunk 最大体积限制。
+2. 评估并实现 `stream_get_bytes` / `stream_post_bytes` / `stream_put_bytes` 等 bytes chunk API。
+3. 跑 web_ino_response_headers、http_client_bytes、bytes 和完整 `cargo test`。
 
-主线程同时负责 WebIno middleware/limits 的测试草案，不立刻实现。第一批完成后再启动 Worker B/E，避免 `src/interpreter/mod.rs` 出现大冲突。
+这一步能把二进制能力从“可用”推进到“更适合嵌入和生产边界”。

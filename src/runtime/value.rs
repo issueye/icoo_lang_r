@@ -19,6 +19,7 @@ pub enum Value {
     Float(f64),
     String(String),
     Bytes(Rc<Vec<u8>>),
+    Buffer(Rc<RefCell<Vec<u8>>>),
     Array(Rc<RefCell<Vec<Value>>>),
     Map(Rc<RefCell<HashMap<String, Value>>>),
     Function(Rc<IcooFunction>),
@@ -59,6 +60,7 @@ impl Value {
             Value::Float(_) => "Float".to_string(),
             Value::String(_) => "String".to_string(),
             Value::Bytes(_) => "Bytes".to_string(),
+            Value::Buffer(_) => "Buffer".to_string(),
             Value::Array(_) => "Array".to_string(),
             Value::Map(_) => "Map".to_string(),
             Value::Function(_) => "Function".to_string(),
@@ -91,6 +93,14 @@ impl Value {
             }
             Value::String(value) => value.clone(),
             Value::Bytes(bytes) => bytes_debug_display(bytes),
+            Value::Buffer(bytes) => {
+                let bytes_ref = bytes.borrow();
+                let mut preview = bytes_to_hex(&bytes_ref[..bytes_ref.len().min(16)]);
+                if bytes_ref.len() > 16 {
+                    preview.push_str("...");
+                }
+                format!("<buffer len={} hex={}>", bytes_ref.len(), preview)
+            }
             Value::Array(values) => {
                 let parts: Vec<String> = values.borrow().iter().map(Value::display).collect();
                 format!("[{}]", parts.join(", "))
@@ -136,6 +146,100 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
         output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     output
+}
+
+pub fn bytes_from_hex(value: &str) -> Result<Vec<u8>, String> {
+    let mut digits = Vec::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => return Err("hex input contains a non-hex character".to_string()),
+        };
+        digits.push(digit);
+    }
+    if digits.len() % 2 != 0 {
+        return Err("hex input must contain an even number of digits".to_string());
+    }
+    let mut bytes = Vec::with_capacity(digits.len() / 2);
+    for pair in digits.chunks_exact(2) {
+        bytes.push((pair[0] << 4) | pair[1]);
+    }
+    Ok(bytes)
+}
+
+pub fn bytes_to_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(third & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
+pub fn bytes_from_base64(value: &str) -> Result<Vec<u8>, String> {
+    let input: Vec<u8> = value
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    if input.len() % 4 != 0 {
+        return Err("Base64 input length must be a multiple of 4".to_string());
+    }
+    let mut output = Vec::with_capacity(input.len() / 4 * 3);
+    for (chunk_index, chunk) in input.chunks(4).enumerate() {
+        let mut values = [0u8; 4];
+        let mut padding = 0;
+        for (index, byte) in chunk.iter().copied().enumerate() {
+            values[index] = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => {
+                    padding += 1;
+                    0
+                }
+                _ => return Err("Base64 input contains an invalid character".to_string()),
+            };
+            if padding > 0 && byte != b'=' {
+                return Err("Base64 padding must appear only at the end".to_string());
+            }
+        }
+        if padding > 2 {
+            return Err("Base64 input has too much padding".to_string());
+        }
+        if padding > 0 && chunk_index != input.len() / 4 - 1 {
+            return Err("Base64 padding must appear only in the final chunk".to_string());
+        }
+
+        output.push((values[0] << 2) | (values[1] >> 4));
+        if padding < 2 {
+            output.push((values[1] << 4) | (values[2] >> 2));
+        }
+        if padding == 0 {
+            output.push((values[2] << 6) | values[3]);
+        }
+    }
+    Ok(output)
 }
 
 fn bytes_debug_display(bytes: &[u8]) -> String {
@@ -424,7 +528,7 @@ pub struct WebInoResponse {
     pub status: i64,
     pub body: String,
     pub body_bytes: Option<Vec<u8>>,
-    pub chunks: Vec<String>,
+    pub chunks: Vec<Vec<u8>>,
     pub content_type: String,
     pub content_type_overridden: bool,
     pub headers: HashMap<String, String>,

@@ -33,6 +33,14 @@ fn raw_get(port: u16, path: &str) -> Vec<u8> {
     response
 }
 
+fn raw_request(port: u16, request: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.write_all(request).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    response
+}
+
 fn response_head(response: &[u8]) -> String {
     let split = response
         .windows(4)
@@ -42,11 +50,15 @@ fn response_head(response: &[u8]) -> String {
 }
 
 fn response_body(response: &[u8]) -> String {
+    String::from_utf8_lossy(response_body_bytes(response)).into_owned()
+}
+
+fn response_body_bytes(response: &[u8]) -> &[u8] {
     let split = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .unwrap();
-    String::from_utf8_lossy(&response[split + 4..]).into_owned()
+    &response[split + 4..]
 }
 
 fn icoo_string(value: &str) -> String {
@@ -130,6 +142,146 @@ app.listen_once("127.0.0.1", {})
     assert!(head.contains("Content-Type: text/event-stream"));
     assert!(head.contains("X-Stream-Id: stream-1"));
     assert_eq!(response_body(&response), "1\r\na\r\n1\r\nb\r\n0\r\n\r\n");
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn supports_web_ino_bytes_request_and_response_bodies() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_bytes");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn echo(req: Map<String, Any>, res: WebInoResponse):
+    res.send_bytes(req.get("body_bytes"), "application/octet-stream")
+
+app.post("/echo", echo)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let body = [0x00, 0xff, b'A', b'Z'];
+    let mut request = format!(
+        "POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(&body);
+    let response = raw_request(port, &request);
+    let head = response_head(&response);
+
+    assert!(head.starts_with("HTTP/1.1 200 OK"));
+    assert!(head.contains("Content-Type: application/octet-stream"));
+    assert_eq!(response_body_bytes(&response), body);
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn supports_web_ino_multipart_content_bytes() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_multipart_bytes");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn upload(req: Map<String, Any>, res: WebInoResponse):
+    let files = req.get("files")
+    let file = files.get("avatar")
+    res.send_bytes(file.get("content_bytes"), file.get("content_type"))
+
+app.post("/upload", upload)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let boundary = "icoo-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"avatar\"; filename=\"avatar.bin\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(&[0xff, 0x00, b'A']);
+    body.extend_from_slice(format!("\r\n--{}--\r\n", boundary).as_bytes());
+    let mut request = format!(
+        "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: multipart/form-data; boundary={}\r\nContent-Length: {}\r\n\r\n",
+        boundary,
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(&body);
+    let response = raw_request(port, &request);
+    let head = response_head(&response);
+
+    assert!(head.starts_with("HTTP/1.1 200 OK"));
+    assert!(head.contains("Content-Type: application/octet-stream"));
+    assert_eq!(response_body_bytes(&response), [0xff, 0x00, b'A']);
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn supports_web_ino_chunked_write_bytes() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_write_bytes");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn stream(req: Map<String, Any>, res: WebInoResponse):
+    res.content_type("application/octet-stream")
+    res.write_bytes(Bytes.from_hex("00ff"))
+    res.write_bytes("AZ".to_bytes())
+    res.end()
+
+app.get("/stream-bytes", stream)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let response = raw_get(port, "/stream-bytes");
+    let head = response_head(&response);
+
+    assert!(head.starts_with("HTTP/1.1 200 OK"));
+    assert!(head.contains("Transfer-Encoding: chunked"));
+    assert!(head.contains("Content-Type: application/octet-stream"));
+    assert_eq!(
+        response_body_bytes(&response),
+        &[
+            b'2', b'\r', b'\n', 0x00, 0xff, b'\r', b'\n', b'2', b'\r', b'\n', b'A', b'Z', b'\r',
+            b'\n', b'0', b'\r', b'\n', b'\r', b'\n'
+        ]
+    );
     server_handle.join().unwrap().unwrap();
 }
 

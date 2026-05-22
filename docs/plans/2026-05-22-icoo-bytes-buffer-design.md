@@ -176,7 +176,7 @@ Buffer
 
 ```text
 Buffer.new() -> Buffer
-Buffer.from(value: Bytes) -> Buffer
+Buffer.from_bytes(value: Bytes) -> Buffer
 Buffer.from_string(value: String) -> Buffer
 ```
 
@@ -455,7 +455,7 @@ cargo test
 2. 新增类型名、display、truthy/equality 基础行为。
 3. 实现 `Bytes.empty/from_hex/from_base64/from_string`。
 4. 实现 `Bytes.len/slice/concat/equals/to_hex/to_base64/to_string`。
-5. 实现 `Buffer.new/from/from_string/append/append_string/slice/to_bytes/clear`。
+5. 实现 `Buffer.new/from_bytes/from_string/append/append_string/slice/to_bytes/clear`。
 6. 补类型检查器方法返回值和参数检查。
 
 ### Phase 2：std.io.fs 二进制 API
