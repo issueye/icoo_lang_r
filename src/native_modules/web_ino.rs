@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::IcooResult;
 use crate::interpreter::expect_arity;
 use crate::lexer::token::Span;
@@ -11,7 +11,22 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.web.ino",
     kind: "web.ino",
     type_name: "WebIno",
-    methods: &["App", "create"],
+    methods: &[
+        NativeMethodSpec {
+            name: "App",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "WebInoApp",
+        },
+        NativeMethodSpec {
+            name: "create",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "WebInoApp",
+        },
+    ],
 };
 
 pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {

@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_string, toml_to_value, value_to_toml};
 use crate::lexer::token::Span;
@@ -8,7 +8,22 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.toml",
     kind: "toml",
     type_name: "Toml",
-    methods: &["stringify", "parse"],
+    methods: &[
+        NativeMethodSpec {
+            name: "stringify",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Any"],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "parse",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Any",
+        },
+    ],
 };
 
 pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {

@@ -1033,6 +1033,13 @@ fn native_method_sig_for_receiver(
     if matches!(method_name, "to_string" | "type_name") {
         return Some(native_sig(NativeArity::Exact(0), vec![], None, return_type));
     }
+    if let Some(sig) = receiver
+        .name()
+        .and_then(|type_name| native_modules::method_spec_for_type(type_name, method_name))
+        .map(native_method_sig_from_spec)
+    {
+        return Some(sig);
+    }
     match receiver {
         TypeInfo::Task(_) => match method_name {
             "result" | "is_done" | "is_failed" | "cancel" => {
@@ -1044,6 +1051,36 @@ fn native_method_sig_for_receiver(
         _ => receiver
             .name()
             .and_then(|type_name| native_method_sig(type_name, method_name, return_type)),
+    }
+}
+
+fn native_method_sig_from_spec(spec: &native_modules::NativeMethodSpec) -> NativeMethodSig {
+    NativeMethodSig {
+        arity: native_arity_from_spec(spec.arity),
+        params: spec
+            .params
+            .iter()
+            .map(|param| Some(native_type_from_spec(param)))
+            .collect(),
+        variadic: spec.variadic.map(native_type_from_spec),
+        return_type: native_type_from_spec(spec.return_type),
+    }
+}
+
+fn native_arity_from_spec(arity: native_modules::NativeAritySpec) -> NativeArity {
+    match arity {
+        native_modules::NativeAritySpec::Exact(expected) => NativeArity::Exact(expected),
+        native_modules::NativeAritySpec::Range { min, max } => NativeArity::Range { min, max },
+        native_modules::NativeAritySpec::AtLeast(min) => NativeArity::AtLeast(min),
+    }
+}
+
+fn native_type_from_spec(name: &str) -> TypeInfo {
+    match name {
+        "Array<String>" => TypeInfo::array(TypeInfo::known("String")),
+        "Map<String, Any>" => TypeInfo::map(TypeInfo::known("String"), TypeInfo::known("Any")),
+        "Any" => TypeInfo::known("Any"),
+        other => TypeInfo::known(other),
     }
 }
 

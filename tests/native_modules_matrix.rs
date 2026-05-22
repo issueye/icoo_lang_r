@@ -14,9 +14,16 @@ fn run(source: &str) -> Result<Vec<String>, String> {
 
 #[test]
 fn native_module_registry_matches_current_standard_library_surface() {
-    let modules: Vec<(&str, &str, &str, &[&str])> = icoo_lang_r::native_modules::SPECS
+    let modules: Vec<(&str, &str, &str, Vec<&str>)> = icoo_lang_r::native_modules::SPECS
         .iter()
-        .map(|spec| (spec.import_path, spec.kind, spec.type_name, spec.methods))
+        .map(|spec| {
+            (
+                spec.import_path,
+                spec.kind,
+                spec.type_name,
+                spec.methods.iter().map(|method| method.name).collect(),
+            )
+        })
         .collect();
 
     assert_eq!(
@@ -43,6 +50,102 @@ fn native_module_registry_matches_current_standard_library_surface() {
         assert!(!type_name.is_empty(), "{import_path} missing type name");
         assert!(!methods.is_empty(), "{import_path} missing methods");
     }
+}
+
+#[test]
+fn native_module_method_specs_cover_registry_and_lookup() {
+    use icoo_lang_r::native_modules::{NativeAritySpec, SPECS};
+
+    for spec in SPECS {
+        for method in spec.methods {
+            assert!(
+                icoo_lang_r::native_modules::has_method(spec.import_path, method.name),
+                "{}.{} missing import-path lookup",
+                spec.import_path,
+                method.name
+            );
+            assert!(
+                icoo_lang_r::native_modules::has_method(spec.kind, method.name),
+                "{}.{} missing kind lookup",
+                spec.kind,
+                method.name
+            );
+            assert!(
+                icoo_lang_r::native_modules::method_spec_for_type(spec.type_name, method.name)
+                    .is_some(),
+                "{}.{} missing type-name lookup",
+                spec.type_name,
+                method.name
+            );
+
+            let fixed_capacity = match method.arity {
+                NativeAritySpec::Exact(expected) => expected,
+                NativeAritySpec::Range { max, .. } => max,
+                NativeAritySpec::AtLeast(_) => method.params.len(),
+            };
+            assert!(
+                method.params.len() >= fixed_capacity,
+                "{}.{} has fewer param specs than arity",
+                spec.import_path,
+                method.name
+            );
+            assert!(
+                !method.return_type.is_empty(),
+                "{}.{} missing return type",
+                spec.import_path,
+                method.name
+            );
+        }
+    }
+
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.io.fs",
+        "read_text"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.net.http.client",
+        "stream_get"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.web.ino",
+        "create"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method("std.os", "pid"));
+    assert!(!icoo_lang_r::native_modules::has_method(
+        "std.io.fs",
+        "missing"
+    ));
+}
+
+#[test]
+fn typechecker_uses_native_module_metadata_for_argument_checks() {
+    let err = run(r#"
+import "std.io.fs" as fs
+fs.read_text(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.net.http.client" as client
+client.get(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.os" as os
+os.has_env(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.web.ino" as ino
+ino.create(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: method expected 0 arguments but got 1"));
 }
 
 #[test]

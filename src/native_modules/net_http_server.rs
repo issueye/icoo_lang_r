@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{
     expect_arity, expect_int, expect_string, http_server_serve_once, Interpreter,
@@ -10,7 +10,13 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.net.http.server",
     kind: "net.http.server",
     type_name: "NetHttpServer",
-    methods: &["serve_once"],
+    methods: &[NativeMethodSpec {
+        name: "serve_once",
+        arity: NativeAritySpec::Exact(3),
+        params: &["String", "Int", "String"],
+        variadic: None,
+        return_type: "Nil",
+    }],
 };
 
 pub(crate) fn call(

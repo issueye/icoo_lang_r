@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_string, json_to_value, value_to_json};
 use crate::lexer::token::Span;
@@ -8,7 +8,22 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.json",
     kind: "json",
     type_name: "Json",
-    methods: &["stringify", "parse"],
+    methods: &[
+        NativeMethodSpec {
+            name: "stringify",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Any"],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "parse",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Any",
+        },
+    ],
 };
 
 pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {

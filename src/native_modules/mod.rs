@@ -20,7 +20,22 @@ pub struct NativeModuleSpec {
     pub import_path: &'static str,
     pub kind: &'static str,
     pub type_name: &'static str,
-    pub methods: &'static [&'static str],
+    pub methods: &'static [NativeMethodSpec],
+}
+
+pub struct NativeMethodSpec {
+    pub name: &'static str,
+    pub arity: NativeAritySpec,
+    pub params: &'static [&'static str],
+    pub variadic: Option<&'static str>,
+    pub return_type: &'static str,
+}
+
+#[derive(Clone, Copy)]
+pub enum NativeAritySpec {
+    Exact(usize),
+    Range { min: usize, max: usize },
+    AtLeast(usize),
 }
 
 pub const SPECS: &[NativeModuleSpec] = &[
@@ -61,12 +76,22 @@ pub fn kind(module: &str) -> &str {
 }
 
 pub fn has_method(module: &str, name: &str) -> bool {
+    method_spec(module, name).is_some()
+}
+
+pub fn method_spec(module: &str, name: &str) -> Option<&'static NativeMethodSpec> {
     let kind = kind(module);
     SPECS
         .iter()
         .find(|spec| spec.kind == kind)
-        .map(|spec| spec.methods.contains(&name))
-        .unwrap_or(false)
+        .and_then(|spec| spec.methods.iter().find(|method| method.name == name))
+}
+
+pub fn method_spec_for_type(type_name: &str, name: &str) -> Option<&'static NativeMethodSpec> {
+    SPECS
+        .iter()
+        .find(|spec| spec.type_name == type_name)
+        .and_then(|spec| spec.methods.iter().find(|method| method.name == name))
 }
 
 pub(crate) fn call(

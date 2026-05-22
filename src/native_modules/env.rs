@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::IcooResult;
 use crate::interpreter::{expect_arity, expect_string, Interpreter};
 use crate::lexer::token::Span;
@@ -10,7 +10,36 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.env",
     kind: "env",
     type_name: "Env",
-    methods: &["cwd", "args", "get", "has"],
+    methods: &[
+        NativeMethodSpec {
+            name: "cwd",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "args",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Array<String>",
+        },
+        NativeMethodSpec {
+            name: "get",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "has",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bool",
+        },
+    ],
 };
 
 pub(crate) fn call(

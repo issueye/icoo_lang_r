@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{
     expect_string, http_client_request, http_stream_method_name, HttpClientHeaders, Interpreter,
@@ -11,16 +11,76 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     kind: "net.http.client",
     type_name: "NetHttpClient",
     methods: &[
-        "get",
-        "post",
-        "put",
-        "delete",
-        "options",
-        "stream_get",
-        "stream_post",
-        "stream_put",
-        "stream_delete",
-        "stream_options",
+        NativeMethodSpec {
+            name: "get",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "post",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "put",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "delete",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "options",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_get",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_post",
+            arity: NativeAritySpec::Range { min: 3, max: 4 },
+            params: &["String", "String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_put",
+            arity: NativeAritySpec::Range { min: 3, max: 4 },
+            params: &["String", "String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_delete",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_options",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
     ],
 };
 

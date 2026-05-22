@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::IcooResult;
 use crate::interpreter::{expect_arity, now_duration};
 use crate::lexer::token::Span;
@@ -8,7 +8,22 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.time",
     kind: "time",
     type_name: "Time",
-    methods: &["now_ms", "now_sec"],
+    methods: &[
+        NativeMethodSpec {
+            name: "now_ms",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Int",
+        },
+        NativeMethodSpec {
+            name: "now_sec",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Int",
+        },
+    ],
 };
 
 pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {

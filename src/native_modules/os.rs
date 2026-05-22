@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_string, Interpreter};
 use crate::lexer::token::Span;
@@ -11,7 +11,69 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     kind: "os",
     type_name: "Os",
     methods: &[
-        "name", "family", "arch", "pid", "cwd", "args", "exe_path", "get_env", "has_env",
+        NativeMethodSpec {
+            name: "name",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "family",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "arch",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "pid",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Int",
+        },
+        NativeMethodSpec {
+            name: "cwd",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "args",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Array<String>",
+        },
+        NativeMethodSpec {
+            name: "exe_path",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "get_env",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "has_env",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bool",
+        },
     ],
 };
 

@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_number, now_duration, numeric_min_max};
 use crate::lexer::token::Span;
@@ -8,7 +8,57 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.math",
     kind: "math",
     type_name: "Math",
-    methods: &["abs", "floor", "ceil", "round", "min", "max", "random"],
+    methods: &[
+        NativeMethodSpec {
+            name: "abs",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Number"],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "floor",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Number"],
+            variadic: None,
+            return_type: "Int",
+        },
+        NativeMethodSpec {
+            name: "ceil",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Number"],
+            variadic: None,
+            return_type: "Int",
+        },
+        NativeMethodSpec {
+            name: "round",
+            arity: NativeAritySpec::Exact(1),
+            params: &["Number"],
+            variadic: None,
+            return_type: "Int",
+        },
+        NativeMethodSpec {
+            name: "min",
+            arity: NativeAritySpec::Exact(2),
+            params: &["Number", "Number"],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "max",
+            arity: NativeAritySpec::Exact(2),
+            params: &["Number", "Number"],
+            variadic: None,
+            return_type: "Any",
+        },
+        NativeMethodSpec {
+            name: "random",
+            arity: NativeAritySpec::Exact(0),
+            params: &[],
+            variadic: None,
+            return_type: "Float",
+        },
+    ],
 };
 
 pub(crate) fn call(name: &str, args: Vec<Value>, span: Span) -> Option<IcooResult<Value>> {

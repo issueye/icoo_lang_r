@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::IcooResult;
 use crate::interpreter::{expect_arity, Interpreter};
 use crate::lexer::token::Span;
@@ -8,7 +8,13 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     import_path: "std.io",
     kind: "io",
     type_name: "Io",
-    methods: &["print"],
+    methods: &[NativeMethodSpec {
+        name: "print",
+        arity: NativeAritySpec::Exact(1),
+        params: &["Any"],
+        variadic: None,
+        return_type: "Nil",
+    }],
 };
 
 pub(crate) fn call(

@@ -1,4 +1,4 @@
-use super::NativeModuleSpec;
+use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_string, Interpreter};
 use crate::lexer::token::Span;
@@ -12,13 +12,55 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
     kind: "io.fs",
     type_name: "IoFs",
     methods: &[
-        "exists",
-        "is_file",
-        "is_dir",
-        "read_text",
-        "write_text",
-        "append_text",
-        "list_dir",
+        NativeMethodSpec {
+            name: "exists",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bool",
+        },
+        NativeMethodSpec {
+            name: "is_file",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bool",
+        },
+        NativeMethodSpec {
+            name: "is_dir",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Bool",
+        },
+        NativeMethodSpec {
+            name: "read_text",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "String",
+        },
+        NativeMethodSpec {
+            name: "write_text",
+            arity: NativeAritySpec::Exact(2),
+            params: &["String", "String"],
+            variadic: None,
+            return_type: "Nil",
+        },
+        NativeMethodSpec {
+            name: "append_text",
+            arity: NativeAritySpec::Exact(2),
+            params: &["String", "String"],
+            variadic: None,
+            return_type: "Nil",
+        },
+        NativeMethodSpec {
+            name: "list_dir",
+            arity: NativeAritySpec::Exact(1),
+            params: &["String"],
+            variadic: None,
+            return_type: "Array<String>",
+        },
     ],
 };
 
