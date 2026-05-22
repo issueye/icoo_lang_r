@@ -91,3 +91,40 @@ app.listen("127.0.0.1", {}, 2)
 
     server_handle.join().unwrap().unwrap();
 }
+
+#[test]
+fn returns_not_found_for_unmatched_web_ino_routes() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_routes_404");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn home(req: Map<String, Any>, res: WebInoResponse):
+    res.send("home")
+
+app.get("/", home)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle =
+        thread::spawn(move || icoo_lang_r::run_file(server_path).map_err(|err| err.to_string()));
+    thread::sleep(Duration::from_millis(150));
+
+    let missing = http_get(port, "/missing").unwrap();
+
+    assert!(missing.starts_with("HTTP/1.1 404 Not Found"), "{missing}");
+    assert_eq!(response_body(&missing), "Not Found");
+
+    server_handle.join().unwrap().unwrap();
+}

@@ -60,7 +60,10 @@ impl Resolver {
             }
             Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => {
                 if let Some(initializer) = &decl.initializer {
-                    self.resolve_expr(initializer)?;
+                    self.resolve_expr_with_await_policy(
+                        initializer,
+                        matches!(initializer, Expr::Await { .. }),
+                    )?;
                 }
             }
             Stmt::Function(decl) => self.resolve_function(decl)?,
@@ -105,7 +108,10 @@ impl Resolver {
                     ));
                 }
                 if let Some(value) = value {
-                    self.resolve_expr(value)?;
+                    self.resolve_expr_with_await_policy(
+                        value,
+                        matches!(value, Expr::Await { .. }),
+                    )?;
                 }
             }
             Stmt::Yield { value, span } => {
@@ -135,7 +141,9 @@ impl Resolver {
                     ));
                 }
             }
-            Stmt::Expr(expr) => self.resolve_expr(expr)?,
+            Stmt::Expr(expr) => {
+                self.resolve_expr_with_await_policy(expr, matches!(expr, Expr::Await { .. }))?
+            }
         }
         Ok(())
     }
@@ -156,6 +164,14 @@ impl Resolver {
     }
 
     fn resolve_expr(&mut self, expr: &Expr) -> IcooResult<()> {
+        self.resolve_expr_with_await_policy(expr, false)
+    }
+
+    fn resolve_expr_with_await_policy(
+        &mut self,
+        expr: &Expr,
+        allow_direct_await: bool,
+    ) -> IcooResult<()> {
         match expr {
             Expr::Literal(_, _) | Expr::Variable(_) | Expr::Self_(_) | Expr::Super(_) => {}
             Expr::Array(values, _) => {
@@ -195,6 +211,12 @@ impl Resolver {
                 if self.function != FunctionContext::Async {
                     return Err(IcooError::resolve(
                         "await can only be used inside an async fn",
+                        *span,
+                    ));
+                }
+                if !allow_direct_await {
+                    return Err(IcooError::resolve(
+                        "await can only be used as a standalone expression, binding initializer, or return value",
                         *span,
                     ));
                 }

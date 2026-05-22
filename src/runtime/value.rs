@@ -4,9 +4,12 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+static NEXT_EVENT_LOOP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub enum Value {
@@ -157,6 +160,8 @@ pub enum CoroutineInstr {
 #[derive(Debug)]
 pub struct IcooTask {
     pub id: u64,
+    pub loop_id: u64,
+    pub event_loop: Weak<RefCell<IcooEventLoop>>,
     pub coroutine: Rc<RefCell<IcooCoroutine>>,
     pub state: TaskState,
     pub result: Option<Value>,
@@ -176,6 +181,7 @@ pub enum TaskState {
 
 #[derive(Debug)]
 pub struct IcooEventLoop {
+    pub id: u64,
     pub next_task_id: u64,
     pub ready: VecDeque<Rc<RefCell<IcooTask>>>,
     pub timers: Vec<SleepTimer>,
@@ -186,6 +192,7 @@ pub struct IcooEventLoop {
 impl IcooEventLoop {
     pub fn new_local() -> Self {
         Self {
+            id: NEXT_EVENT_LOOP_ID.fetch_add(1, Ordering::Relaxed),
             next_task_id: 1,
             ready: VecDeque::new(),
             timers: Vec::new(),
@@ -196,6 +203,7 @@ impl IcooEventLoop {
 
     pub fn new_tokio(worker_threads: usize) -> Result<Self, String> {
         Ok(Self {
+            id: NEXT_EVENT_LOOP_ID.fetch_add(1, Ordering::Relaxed),
             next_task_id: 1,
             ready: VecDeque::new(),
             timers: Vec::new(),

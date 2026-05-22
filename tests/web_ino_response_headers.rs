@@ -49,6 +49,10 @@ fn response_body(response: &[u8]) -> String {
     String::from_utf8_lossy(&response[split + 4..]).into_owned()
 }
 
+fn icoo_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[test]
 fn supports_custom_headers_and_content_type_on_normal_responses() {
     let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_normal");
@@ -181,4 +185,105 @@ app.listen_once("127.0.0.1", {})
         let err = server_handle.join().unwrap().unwrap_err();
         assert!(err.contains(expected), "unexpected error: {}", err);
     }
+}
+
+#[test]
+fn rejects_response_mutation_after_streaming_starts() {
+    for (case_name, bad_call, expected) in [
+        (
+            "status",
+            r#"res.status(201)"#,
+            "cannot change HTTP status after streaming has started",
+        ),
+        (
+            "header",
+            r#"res.header("X-Late", "value")"#,
+            "cannot change HTTP headers after streaming has started",
+        ),
+        (
+            "content_type",
+            r#"res.content_type("application/json")"#,
+            "cannot change HTTP content type after streaming has started",
+        ),
+        (
+            "send",
+            r#"res.send("late")"#,
+            "cannot send response after streaming has started",
+        ),
+        (
+            "json",
+            r#"res.json({"late": true})"#,
+            "cannot send JSON response after streaming has started",
+        ),
+    ] {
+        let dir = PathBuf::from(format!(
+            "target/icoo_module_tests/web_ino_response_headers_stream_mutation_{}",
+            case_name
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let port = free_port();
+        let server_path = dir.join("server.icoo");
+        fs::write(
+            &server_path,
+            format!(
+                r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn bad(req: Map<String, Any>, res: WebInoResponse):
+    res.write("a")
+    {}
+
+app.get("/bad", bad)
+app.listen_once("127.0.0.1", {})
+"#,
+                bad_call, port
+            ),
+        )
+        .unwrap();
+
+        let server_handle = start_server(server_path);
+        let _ = raw_get(port, "/bad");
+        let err = server_handle.join().unwrap().unwrap_err();
+        assert!(err.contains(expected), "unexpected error: {}", err);
+    }
+}
+
+#[test]
+fn escapes_download_filename_quotes_in_content_disposition() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_download_escape");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let download_path = dir.join("payload.txt");
+    fs::write(&download_path, "payload").unwrap();
+    let server_path = dir.join("server.icoo");
+    let download_path = icoo_string(&download_path.display().to_string());
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn download(req: Map<String, Any>, res: WebInoResponse):
+    res.download("{}", "report \"final\".txt")
+
+app.get("/download", download)
+app.listen_once("127.0.0.1", {})
+"#,
+            download_path, port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let response = raw_get(port, "/download");
+    let head = response_head(&response);
+
+    assert!(head.starts_with("HTTP/1.1 200 OK"));
+    assert!(head.contains(r#"Content-Disposition: attachment; filename="report \"final\".txt""#));
+    assert_eq!(response_body(&response), "payload");
+    server_handle.join().unwrap().unwrap();
 }
