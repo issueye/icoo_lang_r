@@ -440,6 +440,8 @@ fn keyword_or_ident(text: String) -> TokenKind {
         "co" => TokenKind::Co,
         "fn" => TokenKind::Fn,
         "class" => TokenKind::Class,
+        "try" => TokenKind::Try,
+        "catch" => TokenKind::Catch,
         "if" => TokenKind::If,
         "elif" => TokenKind::Elif,
         "else" => TokenKind::Else,

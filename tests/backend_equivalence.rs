@@ -4,6 +4,7 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     Ast,
+    Vm,
 }
 
 #[derive(Debug)]
@@ -16,6 +17,7 @@ struct Case {
 fn run_backend(backend: Backend, source: &str) -> Result<Vec<String>, String> {
     match backend {
         Backend::Ast => run_ast(source),
+        Backend::Vm => run_vm(source),
     }
 }
 
@@ -23,6 +25,16 @@ fn run_ast(source: &str) -> Result<Vec<String>, String> {
     let output = Rc::new(RefCell::new(Vec::new()));
     let captured = output.clone();
     icoo_lang_r::run_source_with_output(source, move |line| {
+        captured.borrow_mut().push(line);
+    })
+    .map(|_| output.borrow().clone())
+    .map_err(|err| err.to_string())
+}
+
+fn run_vm(source: &str) -> Result<Vec<String>, String> {
+    let output = Rc::new(RefCell::new(Vec::new()));
+    let captured = output.clone();
+    icoo_lang_r::vm::run_sync_subset_with_output(source, move |line| {
         captured.borrow_mut().push(line);
     })
     .map(|_| output.borrow().clone())
@@ -44,6 +56,92 @@ fn assert_sync_subset_cases(cases: &[Case]) {
             );
         }
     }
+}
+
+fn assert_vm_sync_subset_cases(cases: &[Case]) {
+    let backends = [Backend::Ast, Backend::Vm];
+
+    for case in cases {
+        for backend in backends {
+            let output = run_backend(backend, case.source).unwrap_or_else(|err| {
+                panic!("case '{}' failed on {:?}: {}", case.name, backend, err)
+            });
+            assert_eq!(
+                output, case.expected,
+                "case '{}' output mismatch on {:?}",
+                case.name, backend
+            );
+        }
+    }
+}
+
+#[test]
+fn vm_sync_subset_literals_arithmetic_and_bindings_match_ast() {
+    assert_vm_sync_subset_cases(&[
+        Case {
+            name: "vm_numeric_bool_string_ops",
+            source: r#"
+print((1 + 2 * 3).to_string())
+print(((10 - 4) / 2).to_string())
+print((7 % 4).to_string())
+print((1 < 2 and not false).to_string())
+print("ic" + "oo")
+"#,
+            expected: &["7", "3.0", "3", "true", "icoo"],
+        },
+        Case {
+            name: "vm_let_final_assignment",
+            source: r#"
+let count = 1
+count = count + 2
+final tag: String
+tag = "Icoo:" + count.to_string()
+print(tag)
+"#,
+            expected: &["Icoo:3"],
+        },
+    ]);
+}
+
+#[test]
+fn vm_sync_subset_control_flow_matches_ast() {
+    assert_vm_sync_subset_cases(&[Case {
+        name: "vm_if_elif_else_while",
+        source: r#"
+let i = 0
+let total = 0
+while i < 5:
+    i = i + 1
+    if i == 2:
+        total = total + 20
+    elif i == 4:
+        total = total + 40
+    else:
+        total = total + i
+print(total.to_string())
+"#,
+        expected: &["69"],
+    }]);
+}
+
+#[test]
+fn vm_sync_subset_reports_unsupported_features() {
+    let err = run_backend(
+        Backend::Vm,
+        r#"
+fn add(a: Int, b: Int) -> Int:
+    return a + b
+
+print(add(1, 2).to_string())
+"#,
+    )
+    .expect_err("VM should reject function declarations for now");
+
+    assert!(
+        err.contains("VM sync subset does not support function declarations"),
+        "unexpected VM error: {}",
+        err
+    );
 }
 
 #[test]

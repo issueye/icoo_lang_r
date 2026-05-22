@@ -77,6 +77,14 @@ impl Resolver {
                     self.resolve_function(method)?;
                 }
             }
+            Stmt::TryCatch {
+                try_block,
+                catch_block,
+                ..
+            } => {
+                self.resolve_statements(try_block)?;
+                self.resolve_statements(catch_block)?;
+            }
             Stmt::If {
                 condition,
                 then_branch,
@@ -239,6 +247,7 @@ fn stmt_span(stmt: &Stmt) -> crate::lexer::token::Span {
         Stmt::Let(decl) | Stmt::Const(decl) | Stmt::Final(decl) => decl.name.span,
         Stmt::Function(decl) => decl.name.span,
         Stmt::Class(decl) => decl.name.span,
+        Stmt::TryCatch { catch_name, .. } => catch_name.span,
         Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::Expr(condition) => {
             condition.span()
         }

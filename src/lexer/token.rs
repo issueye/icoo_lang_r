@@ -38,6 +38,8 @@ pub enum TokenKind {
     Co,
     Fn,
     Class,
+    Try,
+    Catch,
     If,
     Elif,
     Else,

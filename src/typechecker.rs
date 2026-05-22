@@ -224,6 +224,19 @@ impl TypeChecker {
             }
             Stmt::Function(decl) => self.check_function(decl)?,
             Stmt::Class(decl) => self.check_class(decl)?,
+            Stmt::TryCatch {
+                try_block,
+                catch_name,
+                catch_block,
+            } => {
+                self.check_block(try_block)?;
+                self.push_scope();
+                self.define(catch_name.name.clone(), TypeInfo::known("String"));
+                for stmt in catch_block {
+                    self.check_stmt(stmt)?;
+                }
+                self.pop_scope();
+            }
             Stmt::If {
                 condition,
                 then_branch,

@@ -23,6 +23,11 @@ pub enum Stmt {
     Final(BindingDecl),
     Function(FunctionDecl),
     Class(ClassDecl),
+    TryCatch {
+        try_block: Vec<Stmt>,
+        catch_name: Identifier,
+        catch_block: Vec<Stmt>,
+    },
     If {
         condition: Expr,
         then_branch: Vec<Stmt>,

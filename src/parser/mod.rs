@@ -65,6 +65,9 @@ impl Parser {
         if self.matches(&TokenKind::Class) {
             return Ok(Stmt::Class(self.class_decl()?));
         }
+        if self.matches(&TokenKind::Try) {
+            return self.try_catch_stmt();
+        }
         self.statement()
     }
 
@@ -241,6 +244,19 @@ impl Parser {
         let condition = self.expression()?;
         let body = self.block()?;
         Ok(Stmt::While { condition, body })
+    }
+
+    fn try_catch_stmt(&mut self) -> IcooResult<Stmt> {
+        let try_block = self.block()?;
+        self.skip_newlines();
+        self.consume(TokenKind::Catch, "expected 'catch' after try block")?;
+        let catch_name = self.identifier("expected catch binding name")?;
+        let catch_block = self.block()?;
+        Ok(Stmt::TryCatch {
+            try_block,
+            catch_name,
+            catch_block,
+        })
     }
 
     fn function_decl(&mut self, is_coroutine: bool) -> IcooResult<FunctionDecl> {

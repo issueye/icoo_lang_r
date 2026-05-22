@@ -302,6 +302,25 @@ impl Interpreter {
                 Ok(())
             }
             Stmt::Class(decl) => self.execute_class(decl),
+            Stmt::TryCatch {
+                try_block,
+                catch_name,
+                catch_block,
+            } => match self.execute_block(try_block, Environment::child(self.env.clone())) {
+                Ok(()) => Ok(()),
+                Err(IcooError::Runtime { message, span }) => {
+                    let catch_env = Environment::child(self.env.clone());
+                    let error_text = IcooError::Runtime { message, span }.to_string();
+                    catch_env.borrow_mut().define(
+                        catch_name.name.clone(),
+                        Value::String(error_text),
+                        true,
+                        BindingKind::Const,
+                    );
+                    self.execute_block(catch_block, catch_env)
+                }
+                Err(err) => Err(err),
+            },
             Stmt::If {
                 condition,
                 then_branch,
@@ -2043,6 +2062,7 @@ fn compile_statement(
 ) {
     match stmt {
         Stmt::Yield { value, .. } => instructions.push(CoroutineInstr::Yield(value.clone())),
+        Stmt::TryCatch { .. } => instructions.push(CoroutineInstr::Stmt(stmt.clone())),
         Stmt::While { condition, body } => {
             let start = instructions.len();
             let jump_if_false = instructions.len();
