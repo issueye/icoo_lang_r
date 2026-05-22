@@ -55,7 +55,8 @@ fn open_http_client_request(
     permissions: &RuntimePermissions,
     method: &str,
     url: &str,
-    body: &str,
+    body: &[u8],
+    content_type: Option<&str>,
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<std::net::TcpStream> {
@@ -72,25 +73,32 @@ fn open_http_client_request(
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
-    let request = if http_method_has_request_body(method) {
-        format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: text/plain; charset=utf-8\r\n{}\r\n{}",
+    if http_method_has_request_body(method) {
+        let content_type = content_type.unwrap_or("application/octet-stream");
+        let head = format!(
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: {}\r\n{}\r\n",
             method,
             parsed.path,
             parsed.host,
             body.len(),
+            content_type,
             custom_headers,
-            body
-        )
+        );
+        std::io::Write::write_all(&mut stream, head.as_bytes()).map_err(|err| {
+            IcooError::runtime(format!("http client write failed: {}", err), Some(span))
+        })?;
+        std::io::Write::write_all(&mut stream, body).map_err(|err| {
+            IcooError::runtime(format!("http client write failed: {}", err), Some(span))
+        })?;
     } else {
-        format!(
+        let request = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}\r\n",
             method, parsed.path, parsed.host, custom_headers
-        )
+        );
+        std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
+            IcooError::runtime(format!("http client write failed: {}", err), Some(span))
+        })?;
     };
-    std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
-        IcooError::runtime(format!("http client write failed: {}", err), Some(span))
-    })?;
     Ok(stream)
 }
 
@@ -129,12 +137,48 @@ pub(crate) fn http_client_request(
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<Value> {
-    let mut stream = open_http_client_request(permissions, method, url, body, headers, span)?;
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut response).map_err(|err| {
-        IcooError::runtime(format!("http client read failed: {}", err), Some(span))
-    })?;
-    parse_http_response(&response, span)
+    let mut stream = open_http_client_request(
+        permissions,
+        method,
+        url,
+        body.as_bytes(),
+        Some("text/plain; charset=utf-8"),
+        headers,
+        span,
+    )?;
+    let response = read_http_response(&mut stream, span)?;
+    Ok(http_client_response_value(
+        response.status,
+        response.headers,
+        response.body,
+        false,
+    ))
+}
+
+pub(crate) fn http_client_request_bytes(
+    permissions: &RuntimePermissions,
+    method: &str,
+    url: &str,
+    body: &[u8],
+    headers: &HttpClientHeaders,
+    span: Span,
+) -> IcooResult<Value> {
+    let mut stream = open_http_client_request(
+        permissions,
+        method,
+        url,
+        body,
+        Some("application/octet-stream"),
+        headers,
+        span,
+    )?;
+    let response = read_http_response(&mut stream, span)?;
+    Ok(http_client_response_value(
+        response.status,
+        response.headers,
+        response.body,
+        true,
+    ))
 }
 
 impl Interpreter {
@@ -147,8 +191,15 @@ impl Interpreter {
         handler: Value,
         span: Span,
     ) -> IcooResult<Value> {
-        let mut stream =
-            open_http_client_request(&self.permissions, method, url, body, headers, span)?;
+        let mut stream = open_http_client_request(
+            &self.permissions,
+            method,
+            url,
+            body.as_bytes(),
+            Some("text/plain; charset=utf-8"),
+            headers,
+            span,
+        )?;
         let response = read_http_response_head(&mut stream, span)?;
         let chunk_count = if http_headers_transfer_chunked(&response.headers) {
             http_client_stream_chunked(&mut stream, response.body_prefix, span, |chunk| {
@@ -219,27 +270,59 @@ fn read_http_response_head(
     })
 }
 
-fn parse_http_response(response: &str, span: Span) -> IcooResult<Value> {
-    let (head, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+struct ParsedHttpResponse {
+    status: i64,
+    headers: HashMap<String, Value>,
+    body: Vec<u8>,
+}
+
+fn read_http_response(
+    stream: &mut std::net::TcpStream,
+    span: Span,
+) -> IcooResult<ParsedHttpResponse> {
+    let mut response = Vec::new();
+    std::io::Read::read_to_end(stream, &mut response).map_err(|err| {
+        IcooError::runtime(format!("http client read failed: {}", err), Some(span))
+    })?;
+    let body_start = find_http_body_start(&response).ok_or_else(|| {
         IcooError::runtime(
             "invalid HTTP response: missing header terminator",
             Some(span),
         )
     })?;
-    let (status, headers) = parse_http_response_head(head, span)?;
+    let head = String::from_utf8_lossy(&response[..body_start - 4]).into_owned();
+    let (status, headers) = parse_http_response_head(&head, span)?;
     let body = if http_headers_transfer_chunked(&headers) {
-        decode_chunked_body(body, span)?
+        decode_chunked_bytes(&response[body_start..], span)?
     } else {
-        body.to_string()
+        response[body_start..].to_vec()
     };
+    Ok(ParsedHttpResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+fn http_client_response_value(
+    status: i64,
+    headers: HashMap<String, Value>,
+    body: Vec<u8>,
+    bytes_body: bool,
+) -> Value {
     let mut result = HashMap::new();
     result.insert("status".to_string(), Value::Int(status));
-    result.insert("body".to_string(), Value::String(body));
+    let body = if bytes_body {
+        Value::Bytes(Rc::new(body))
+    } else {
+        Value::String(String::from_utf8_lossy(&body).into_owned())
+    };
+    result.insert("body".to_string(), body);
     result.insert(
         "headers".to_string(),
         Value::Map(Rc::new(RefCell::new(headers))),
     );
-    Ok(Value::Map(Rc::new(RefCell::new(result))))
+    Value::Map(Rc::new(RefCell::new(result)))
 }
 
 fn parse_http_response_head(head: &str, span: Span) -> IcooResult<(i64, HashMap<String, Value>)> {
@@ -296,8 +379,7 @@ fn http_client_stream_response_value(
     Value::Map(Rc::new(RefCell::new(result)))
 }
 
-fn decode_chunked_body(body: &str, span: Span) -> IcooResult<String> {
-    let bytes = body.as_bytes();
+fn decode_chunked_bytes(bytes: &[u8], span: Span) -> IcooResult<Vec<u8>> {
     let mut index = 0;
     let mut decoded = Vec::new();
     loop {
@@ -331,7 +413,7 @@ fn decode_chunked_body(body: &str, span: Span) -> IcooResult<String> {
         }
         index += 2;
     }
-    Ok(String::from_utf8_lossy(&decoded).into_owned())
+    Ok(decoded)
 }
 
 fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {

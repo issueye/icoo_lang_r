@@ -107,6 +107,10 @@ fn native_module_method_specs_cover_registry_and_lookup() {
         "stream_get"
     ));
     assert!(icoo_lang_r::native_modules::has_method(
+        "std.net.http.client",
+        "get_bytes"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
         "std.web.ino",
         "create"
     ));

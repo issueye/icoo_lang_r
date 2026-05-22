@@ -17,7 +17,9 @@ mod http_common;
 mod http_server;
 mod web_ino;
 
-pub(crate) use http_client::{http_client_request, http_stream_method_name, HttpClientHeaders};
+pub(crate) use http_client::{
+    http_client_request, http_client_request_bytes, http_stream_method_name, HttpClientHeaders,
+};
 pub(crate) use http_server::http_server_serve_once;
 
 pub struct Interpreter {

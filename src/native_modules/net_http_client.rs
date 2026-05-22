@@ -1,7 +1,8 @@
 use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{
-    expect_string, http_client_request, http_stream_method_name, HttpClientHeaders, Interpreter,
+    expect_bytes, expect_string, http_client_request, http_client_request_bytes,
+    http_stream_method_name, HttpClientHeaders, Interpreter,
 };
 use crate::lexer::token::Span;
 use crate::runtime::value::Value;
@@ -19,9 +20,23 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "get_bytes",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "post",
             arity: NativeAritySpec::Range { min: 2, max: 3 },
             params: &["String", "String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "post_bytes",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Bytes", "Map"],
             variadic: None,
             return_type: "Map<String, Any>",
         },
@@ -33,6 +48,13 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "put_bytes",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Bytes", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "delete",
             arity: NativeAritySpec::Range { min: 1, max: 2 },
             params: &["String", "Map"],
@@ -40,7 +62,21 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "delete_bytes",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "options",
+            arity: NativeAritySpec::Range { min: 1, max: 2 },
+            params: &["String", "Map"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "options_bytes",
             arity: NativeAritySpec::Range { min: 1, max: 2 },
             params: &["String", "Map"],
             variadic: None,
@@ -106,6 +142,12 @@ fn dispatch(
             let headers = optional_headers(&args, 1, span)?;
             http_client_request(runtime.permissions(), "GET", &url, "", &headers, span)
         }
+        "get_bytes" => {
+            expect_arity_range(&args, 1, 2, span)?;
+            let url = expect_string(&args[0], span)?;
+            let headers = optional_headers(&args, 1, span)?;
+            http_client_request_bytes(runtime.permissions(), "GET", &url, &[], &headers, span)
+        }
         "post" | "put" => {
             expect_arity_range(&args, 2, 3, span)?;
             let url = expect_string(&args[0], span)?;
@@ -120,6 +162,14 @@ fn dispatch(
                 span,
             )
         }
+        "post_bytes" | "put_bytes" => {
+            expect_arity_range(&args, 2, 3, span)?;
+            let url = expect_string(&args[0], span)?;
+            let body = expect_bytes(&args[1], span)?;
+            let headers = optional_headers(&args, 2, span)?;
+            let method = if name == "post_bytes" { "POST" } else { "PUT" };
+            http_client_request_bytes(runtime.permissions(), method, &url, &body, &headers, span)
+        }
         "delete" | "options" => {
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
@@ -132,6 +182,17 @@ fn dispatch(
                 &headers,
                 span,
             )
+        }
+        "delete_bytes" | "options_bytes" => {
+            expect_arity_range(&args, 1, 2, span)?;
+            let url = expect_string(&args[0], span)?;
+            let headers = optional_headers(&args, 1, span)?;
+            let method = if name == "delete_bytes" {
+                "DELETE"
+            } else {
+                "OPTIONS"
+            };
+            http_client_request_bytes(runtime.permissions(), method, &url, &[], &headers, span)
         }
         "stream_get" => {
             expect_arity_range(&args, 2, 3, span)?;

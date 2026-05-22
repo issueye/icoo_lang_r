@@ -988,7 +988,8 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
         (
             "NetHttpClient",
-            "get" | "post" | "put" | "delete" | "options" | "stream_get" | "stream_post"
+            "get" | "get_bytes" | "post" | "post_bytes" | "put" | "put_bytes" | "delete"
+            | "delete_bytes" | "options" | "options_bytes" | "stream_get" | "stream_post"
             | "stream_put" | "stream_delete" | "stream_options",
         ) => Some(TypeInfo::map(
             TypeInfo::known("String"),
@@ -1224,7 +1225,10 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("NetHttpClient", "get" | "delete" | "options") => Some(native_sig(
+        (
+            "NetHttpClient",
+            "get" | "get_bytes" | "delete" | "delete_bytes" | "options" | "options_bytes",
+        ) => Some(native_sig(
             NativeArity::Range { min: 1, max: 2 },
             vec![Some("String"), Some("Map")],
             None,
@@ -1233,6 +1237,12 @@ fn native_method_sig(
         ("NetHttpClient", "post" | "put") => Some(native_sig(
             NativeArity::Range { min: 2, max: 3 },
             vec![Some("String"), Some("String"), Some("Map")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "post_bytes" | "put_bytes") => Some(native_sig(
+            NativeArity::Range { min: 2, max: 3 },
+            vec![Some("String"), Some("Bytes"), Some("Map")],
             None,
             return_type,
         )),
