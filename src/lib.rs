@@ -9,6 +9,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
@@ -21,6 +22,24 @@ fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {
     resolver::resolve(&program)?;
     typechecker::check(&program)?;
     Ok(program)
+}
+
+fn run_protected<F>(f: F) -> Result<(), IcooError>
+where
+    F: FnOnce() -> Result<(), IcooError>,
+{
+    let result = catch_unwind(AssertUnwindSafe(f));
+    match result {
+        Ok(ok) => ok,
+        Err(panic_info) => {
+            let msg = panic_info
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic_info.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "internal panic".to_string());
+            Err(IcooError::runtime(format!("internal runtime panic: {}", msg), None))
+        }
+    }
 }
 
 pub fn check_source(source: &str) -> Result<(), IcooError> {
@@ -41,7 +60,7 @@ pub fn check_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
 pub fn run_source(source: &str) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::new();
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_permissions(
@@ -50,7 +69,7 @@ pub fn run_source_with_permissions(
 ) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_permissions(permissions);
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_logger(source: &str, logger: RuntimeLogger) -> Result<(), IcooError> {
@@ -68,7 +87,7 @@ pub fn run_source_with_permissions_and_logger(
         permissions,
         logger,
     );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_http_tls_roots(
@@ -90,7 +109,7 @@ pub fn run_source_with_permissions_and_http_tls_roots(
         RuntimeLogger::default(),
         Some(std::sync::Arc::new(roots)),
     );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_output_and_http_tls_roots<F>(
@@ -108,7 +127,7 @@ where
         RuntimeLogger::default(),
         Some(std::sync::Arc::new(roots)),
     );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_output_and_http_config<F>(
@@ -129,7 +148,7 @@ where
             http_config,
             RuntimeConfig::default(),
         );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_output_http_config_and_tls_roots<F>(
@@ -151,7 +170,7 @@ where
             http_config,
             RuntimeConfig::default(),
         );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_config(
@@ -168,7 +187,7 @@ pub fn run_source_with_config(
             RuntimeHttpConfig::default(),
             config,
         );
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_source_with_output<F>(source: &str, output: F) -> Result<(), IcooError>
@@ -177,12 +196,12 @@ where
 {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_output(output);
-    interpreter.interpret(&program)
+    run_protected(|| interpreter.interpret(&program))
 }
 
 pub fn run_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
     let mut interpreter = interpreter::Interpreter::new();
-    interpreter.interpret_file(path)
+    run_protected(|| interpreter.interpret_file(path))
 }
 
 pub fn run_file_with_output<F>(path: impl AsRef<Path>, output: F) -> Result<(), IcooError>
@@ -190,5 +209,5 @@ where
     F: FnMut(String) + 'static,
 {
     let mut interpreter = interpreter::Interpreter::with_output(output);
-    interpreter.interpret_file(path)
+    run_protected(|| interpreter.interpret_file(path))
 }
