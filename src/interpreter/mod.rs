@@ -1,6 +1,6 @@
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, Stmt};
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
 use crate::runtime::http_config::RuntimeHttpConfig;
 use crate::runtime::logging::RuntimeLogger;
@@ -193,11 +193,22 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {
+    pub fn interpret(&mut self, program: &Program) -> IcooResult<Value> {
+        let mut last = Value::Nil;
         for stmt in &program.statements {
-            self.execute(stmt)?;
+            last = self.execute_result(stmt)?;
         }
-        Ok(())
+        Ok(last)
+    }
+
+    fn execute_result(&mut self, stmt: &Stmt) -> IcooResult<Value> {
+        match stmt {
+            Stmt::Expr(expr) => self.eval(expr),
+            _ => {
+                self.execute(stmt)?;
+                Ok(Value::Nil)
+            }
+        }
     }
 
     fn install_natives(&mut self) {

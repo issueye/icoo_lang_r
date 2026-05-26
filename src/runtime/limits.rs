@@ -55,6 +55,10 @@ pub fn check_http_stream_chunk_len(len: usize, span: Span) -> IcooResult<()> {
 
 pub const MAX_CALL_DEPTH: usize = 50;
 
+pub const MAX_ARRAY_LEN: usize = 1_000_000;
+pub const MAX_MAP_ENTRIES: usize = 1_000_000;
+pub const MAX_STRING_LEN: usize = 16 * 1024 * 1024;
+
 pub fn check_web_ino_request_len(len: usize) -> Result<(), String> {
     if len > MAX_WEB_INO_REQUEST_BYTES {
         return Err(format!(

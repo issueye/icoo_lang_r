@@ -3,6 +3,7 @@ use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
 use crate::parser::ast::*;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::limits;
 use crate::runtime::value::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -179,27 +180,45 @@ impl Interpreter {
             Expr::Variable(name) => self.env.borrow().get(&name.name, name.span),
             Expr::Self_(span) => self.env.borrow().get("self", *span),
             Expr::Super(span) => self.env.borrow().get("super", *span),
-            Expr::Array(values, _) => {
+            Expr::Array(values, span) => {
+                if values.len() > limits::MAX_ARRAY_LEN {
+                    return Err(IcooError::runtime(
+                        format!("array literal exceeds maximum length ({})", limits::MAX_ARRAY_LEN),
+                        Some(*span),
+                    ));
+                }
                 let mut result = Vec::new();
                 for value in values {
                     result.push(self.eval(value)?);
                 }
                 Ok(Value::Array(Rc::new(RefCell::new(result))))
             }
-            Expr::Map(entries, _) => {
+            Expr::Map(entries, span) => {
+                if entries.len() > limits::MAX_MAP_ENTRIES {
+                    return Err(IcooError::runtime(
+                        format!("map literal exceeds maximum entries ({})", limits::MAX_MAP_ENTRIES),
+                        Some(*span),
+                    ));
+                }
                 let mut result = HashMap::new();
                 for (key, value) in entries {
                     result.insert(key.clone(), self.eval(value)?);
                 }
                 Ok(Value::Map(Rc::new(RefCell::new(result))))
             }
-            Expr::Template(parts, _) => {
+            Expr::Template(parts, span) => {
                 let mut result = String::new();
                 for part in parts {
                     match part {
                         TemplatePart::Text(text) => result.push_str(text),
                         TemplatePart::Expr(expr) => result.push_str(&self.eval(expr)?.display()),
                     }
+                }
+                if result.len() > limits::MAX_STRING_LEN {
+                    return Err(IcooError::runtime(
+                        format!("template string exceeds maximum length ({})", limits::MAX_STRING_LEN),
+                        Some(*span),
+                    ));
                 }
                 Ok(Value::String(result))
             }

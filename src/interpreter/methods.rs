@@ -4,6 +4,7 @@ use super::{
 };
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::runtime::limits;
 use crate::runtime::limits::{check_bytes_len, checked_bytes_total};
 use crate::runtime::value::{bytes_to_base64, bytes_to_hex, Value};
 use std::cell::RefCell;
@@ -369,6 +370,12 @@ impl Interpreter {
             }
             "push" => {
                 expect_arity(&args, 1, span)?;
+                if values.borrow().len() >= limits::MAX_ARRAY_LEN {
+                    return Err(IcooError::runtime(
+                        format!("array exceeds maximum length ({})", limits::MAX_ARRAY_LEN),
+                        Some(span),
+                    ));
+                }
                 values.borrow_mut().push(args[0].clone());
                 Ok(Value::Nil)
             }

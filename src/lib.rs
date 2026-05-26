@@ -1,3 +1,4 @@
+pub mod builder;
 pub mod error;
 pub mod interpreter;
 pub mod lexer;
@@ -9,6 +10,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
+pub use builder::InterpreterBuilder;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
@@ -16,7 +18,7 @@ pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
 use std::path::Path;
 
-fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {
+pub(crate) fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {
     let tokens = lexer::lex(source)?;
     let program = parser::parse(tokens)?;
     resolver::resolve(&program)?;
@@ -60,7 +62,7 @@ pub fn check_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
 pub fn run_source(source: &str) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::new();
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_permissions(
@@ -69,7 +71,7 @@ pub fn run_source_with_permissions(
 ) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_permissions(permissions);
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_logger(source: &str, logger: RuntimeLogger) -> Result<(), IcooError> {
@@ -87,7 +89,7 @@ pub fn run_source_with_permissions_and_logger(
         permissions,
         logger,
     );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_http_tls_roots(
@@ -109,7 +111,7 @@ pub fn run_source_with_permissions_and_http_tls_roots(
         RuntimeLogger::default(),
         Some(std::sync::Arc::new(roots)),
     );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_output_and_http_tls_roots<F>(
@@ -127,7 +129,7 @@ where
         RuntimeLogger::default(),
         Some(std::sync::Arc::new(roots)),
     );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_output_and_http_config<F>(
@@ -148,7 +150,7 @@ where
             http_config,
             RuntimeConfig::default(),
         );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_output_http_config_and_tls_roots<F>(
@@ -170,7 +172,7 @@ where
             http_config,
             RuntimeConfig::default(),
         );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_config(
@@ -187,7 +189,7 @@ pub fn run_source_with_config(
             RuntimeHttpConfig::default(),
             config,
         );
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_source_with_output<F>(source: &str, output: F) -> Result<(), IcooError>
@@ -196,7 +198,7 @@ where
 {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_output(output);
-    run_protected(|| interpreter.interpret(&program))
+    run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
 pub fn run_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
