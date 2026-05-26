@@ -1,6 +1,6 @@
 # Icoo Lang R
 
-Icoo Lang R is a Rust implementation of the Icoo scripting language. Icoo uses Python-like indentation syntax and provides dynamic execution, optional type annotations, classes with single inheritance, one-time assignment bindings, coroutine event loops, local modules, and built-in standard library modules.
+Icoo Lang R is a Rust implementation of the Icoo scripting language. Icoo uses brace-delimited block syntax and provides dynamic execution, optional type annotations, classes with single inheritance, one-time assignment bindings, coroutine event loops, local modules, and built-in standard library modules.
 
 This repository provides:
 
@@ -83,34 +83,42 @@ let count = 10
 final runtime_id: String
 runtime_id = "icoo-" + count.to_string()
 
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
-class Animal:
+}
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print("...")
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
     const KIND: String = "dog"
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print(self.name + " says woof")
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "Dog(" + self.name + ", " + self.breed + ")"
 
+    }
+}
 let dog = Dog("Lucky", "Border Collie", "U001")
 dog.speak()
 print(dog.to_string())
@@ -126,7 +134,7 @@ More examples:
 
 ## Core Features
 
-- Indentation-based blocks.
+- Brace-delimited blocks: functions, classes, conditions, loops, and error handling use `{ ... }`.
 - Bindings with `let`, `const`, and `final`.
 - Optional type annotations, including `Int`, `Float`, `String`, `Array<T>`, `Map<K, V>`, and `Task<T>`.
 - Functions, return checking, and closures.
@@ -145,17 +153,21 @@ More examples:
 ```python
 export const VERSION: String = "modules-1"
 
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
-export class User:
+}
+export class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "User(" + self.name + ")"
+    }
+}
 ```
 
 `main.icoo`:
@@ -182,14 +194,15 @@ Current module-system boundaries:
 ## Coroutines and Event Loops
 
 ```python
-async fn worker(name: String) -> String:
+async fn worker(name: String) -> String {
     print(name + ": start")
     let delay = sleep(0)
     await delay
     print(name + ": end")
     return name
 
-async fn main() -> String:
+}
+async fn main() -> String {
     let loop = current_loop()
     let a = loop.spawn(worker("A"))
     let b = loop.spawn(worker("B"))
@@ -197,6 +210,7 @@ async fn main() -> String:
     let bv = await b
     return av + "+" + bv
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(main())
 print(loop.backend_name())
@@ -248,13 +262,15 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn home(req: Map<String, Any>, res: WebInoResponse):
+fn home(req: Map<String, Any>, res: WebInoResponse) {
     res.send("hello")
 
-fn user(req: Map<String, Any>, res: WebInoResponse):
+}
+fn user(req: Map<String, Any>, res: WebInoResponse) {
     let params = req.get("params")
     res.send("user=" + params.get("id"))
 
+}
 app.get("/", home)
 app.get("/users/:id", user)
 app.listen("127.0.0.1", 3000, 4)

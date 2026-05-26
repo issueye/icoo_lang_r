@@ -66,11 +66,13 @@ print(payload.to_string())
 ```text
 let raw: Bytes = Bytes.from_hex("fffe00")
 
-try:
+try {
     print(raw.to_string())
-catch err:
+}
+catch err {
     print("not utf-8")
 
+}
 print(raw.to_string("lossy"))
 print(raw.to_hex())
 ```
@@ -284,7 +286,7 @@ client.get_bytes(url: String, headers: Map<String, String>?) -> Map
 client.stream_get(url, handler: fn(chunk: String))
 ```
 
-新增 bytes stream 方法：
+已落地 bytes stream 方法：
 
 ```text
 client.stream_get_bytes(url: String, headers: Map<String, String>?, handler: Function) -> Map
@@ -294,8 +296,9 @@ client.stream_post_bytes(url: String, body: Bytes, headers: Map<String, String>?
 handler 每次收到 `Bytes`：
 
 ```text
-fn on_chunk(chunk: Bytes):
+fn on_chunk(chunk: Bytes) {
     print(chunk.len())
+}
 ```
 
 流式返回 Map 保持：

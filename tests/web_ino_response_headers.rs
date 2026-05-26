@@ -1,3 +1,4 @@
+use icoo_lang_r::runtime::limits::MAX_WEB_INO_REQUEST_BYTES;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -66,6 +67,47 @@ fn icoo_string(value: &str) -> String {
 }
 
 #[test]
+fn rejects_oversized_web_ino_request_body() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_oversized_request");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn echo(req: Map<String, Any>, res: WebInoResponse) {{
+    res.send("unexpected")
+}}
+app.post("/upload", echo)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let request = format!(
+        "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        MAX_WEB_INO_REQUEST_BYTES + 1
+    );
+    let response = raw_request(port, request.as_bytes());
+
+    assert!(response_head(&response).contains("400 Bad Request"));
+    assert!(
+        response_body(&response).contains("web.ino request body exceeds maximum size"),
+        "{}",
+        response_body(&response)
+    );
+    server_handle.join().unwrap().unwrap();
+}
+
+#[test]
 fn supports_custom_headers_and_content_type_on_normal_responses() {
     let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_normal");
     fs::create_dir_all(&dir).unwrap();
@@ -79,12 +121,13 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn custom(req: Map<String, Any>, res: WebInoResponse):
+fn custom(req: Map<String, Any>, res: WebInoResponse) {{
     res.status(202)
     res.header("X-Trace-Id", "abc123")
     res.content_type("text/custom; charset=utf-8")
     res.send("ok")
 
+}}
 app.get("/custom", custom)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -118,13 +161,14 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn stream(req: Map<String, Any>, res: WebInoResponse):
+fn stream(req: Map<String, Any>, res: WebInoResponse) {{
     res.header("X-Stream-Id", "stream-1")
     res.content_type("text/event-stream")
     res.write("a")
     res.write("b")
     res.end()
 
+}}
 app.get("/stream", stream)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -159,9 +203,10 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn echo(req: Map<String, Any>, res: WebInoResponse):
+fn echo(req: Map<String, Any>, res: WebInoResponse) {{
     res.send_bytes(req.get("body_bytes"), "application/octet-stream")
 
+}}
 app.post("/echo", echo)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -201,11 +246,12 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn upload(req: Map<String, Any>, res: WebInoResponse):
+fn upload(req: Map<String, Any>, res: WebInoResponse) {{
     let files = req.get("files")
     let file = files.get("avatar")
     res.send_bytes(file.get("content_bytes"), file.get("content_type"))
 
+}}
 app.post("/upload", upload)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -254,12 +300,13 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn stream(req: Map<String, Any>, res: WebInoResponse):
+fn stream(req: Map<String, Any>, res: WebInoResponse) {{
     res.content_type("application/octet-stream")
     res.write_bytes(Bytes.from_hex("00ff"))
     res.write_bytes("AZ".to_bytes())
     res.end()
 
+}}
 app.get("/stream-bytes", stream)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -314,10 +361,11 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn bad(req: Map<String, Any>, res: WebInoResponse):
+fn bad(req: Map<String, Any>, res: WebInoResponse) {{
     {}
     res.send("bad")
 
+}}
 app.get("/bad", bad)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -383,10 +431,11 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn bad(req: Map<String, Any>, res: WebInoResponse):
+fn bad(req: Map<String, Any>, res: WebInoResponse) {{
     res.write("a")
     {}
 
+}}
 app.get("/bad", bad)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -419,9 +468,10 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn download(req: Map<String, Any>, res: WebInoResponse):
+fn download(req: Map<String, Any>, res: WebInoResponse) {{
     res.download("{}", "report \"final\".txt")
 
+}}
 app.get("/download", download)
 app.listen_once("127.0.0.1", {})
 "#,

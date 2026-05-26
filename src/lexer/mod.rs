@@ -10,7 +10,6 @@ pub fn lex(source: &str) -> IcooResult<Vec<Token>> {
 struct Lexer<'a> {
     source: &'a str,
     tokens: Vec<Token>,
-    indents: Vec<usize>,
     offset: usize,
     line_starts: Vec<usize>,
 }
@@ -26,7 +25,6 @@ impl<'a> Lexer<'a> {
         Self {
             source,
             tokens: Vec::new(),
-            indents: vec![0],
             offset: 0,
             line_starts,
         }
@@ -52,7 +50,6 @@ impl<'a> Lexer<'a> {
                 continue;
             }
 
-            self.handle_indent(content_start, line_no)?;
             let consumed_until = self.scan_line(content, line_no, content_start + 1)?;
             self.push(
                 TokenKind::Newline,
@@ -79,16 +76,6 @@ impl<'a> Lexer<'a> {
         }
 
         let line = self.source.lines().count().max(1);
-        while self.indents.len() > 1 {
-            self.indents.pop();
-            self.push(
-                TokenKind::Dedent,
-                line,
-                1,
-                self.source.len(),
-                self.source.len(),
-            );
-        }
         self.push(
             TokenKind::Eof,
             line,
@@ -97,38 +84,6 @@ impl<'a> Lexer<'a> {
             self.source.len(),
         );
         Ok(self.tokens)
-    }
-
-    fn handle_indent(&mut self, indent: usize, line: usize) -> IcooResult<()> {
-        let current = *self.indents.last().unwrap();
-        if indent > current {
-            self.indents.push(indent);
-            self.push(
-                TokenKind::Indent,
-                line,
-                1,
-                self.offset,
-                self.offset + indent,
-            );
-        } else if indent < current {
-            while indent < *self.indents.last().unwrap() {
-                self.indents.pop();
-                self.push(
-                    TokenKind::Dedent,
-                    line,
-                    1,
-                    self.offset,
-                    self.offset + indent,
-                );
-            }
-            if indent != *self.indents.last().unwrap() {
-                return Err(IcooError::lexer(
-                    "indentation does not match any outer indentation level",
-                    Span::new(line, 1, self.offset, self.offset + indent),
-                ));
-            }
-        }
-        Ok(())
     }
 
     fn scan_line(

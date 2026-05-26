@@ -41,7 +41,7 @@
 当前主要风险：
 
 - `src/interpreter/mod.rs` 已收敛为解释器构造、native 安装和模块接线，后续风险主要转向功能边界而不是单文件膨胀。
-- `Bytes`/`Buffer` 尚未完成设计文档中的全部范围：HTTP/WebIno bytes stream 专用 client API、请求/响应体大小限制仍待推进。
+- `Bytes`/`Buffer` 尚未完成设计文档中的全部范围：HTTP client bytes streaming、Bytes、HTTP response/stream chunk 和 WebIno request 大小限制已落地；WebIno bytes streaming 已有 response 侧能力，request 侧 streaming file API 仍待设计。
 - 权限模型仍是 coarse-grained allow/deny；还没有路径白名单、host/port 白名单或运行时资源限制。
 - VM 只覆盖同步小子集，不能承载函数、类、模块、native 标准库和 async 主路径。
 - 文档和语言设计总览需要继续同步，避免设计文档落后于代码。
@@ -101,8 +101,8 @@ cargo test
 - 已完成：`Bytes.from_base64()`、`Bytes.to_base64()`。
 - 已完成：WebIno `req["body_bytes"]`、上传文件 `content_bytes`。
 - 已完成：`res.send_bytes()`、`res.write_bytes()`。
-- HTTP client bytes streaming。
-- body/chunk 最大体积限制。
+- 已完成：HTTP client `stream_get_bytes`、`stream_post_bytes`、`stream_put_bytes`，handler 接收 `Bytes` chunk。
+- 已完成：Bytes、HTTP response/stream chunk 和 WebIno request 最大体积限制。
 
 **Verification:**
 
@@ -175,8 +175,6 @@ cargo test
 
 ## 6. 最小下一步
 
-下一步建议补二进制大小限制和 stream bytes API：
+下一步建议继续评估是否需要把限制做成可配置项，并补 WebIno request 侧 streaming 设计：
 
-- 给 HTTP/WebIno 请求体和响应体加最大体积限制。
-- 评估 `stream_get_bytes` / `stream_post_bytes` 等 API，让 handler 接收 `Bytes` chunk。
 - 保持默认权限和现有 `Bytes` API 兼容。

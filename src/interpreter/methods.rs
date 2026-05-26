@@ -4,6 +4,7 @@ use super::{
 };
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::runtime::limits::{check_bytes_len, checked_bytes_total};
 use crate::runtime::value::{bytes_to_base64, bytes_to_hex, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -150,6 +151,7 @@ impl Interpreter {
             }
             "to_bytes" => {
                 expect_arity(&args, 0, span)?;
+                check_bytes_len(value.len(), span)?;
                 Ok(Value::Bytes(Rc::new(value.as_bytes().to_vec())))
             }
             _ => Err(IcooError::runtime("unknown String method", Some(span))),
@@ -219,7 +221,8 @@ impl Interpreter {
             "concat" => {
                 expect_arity(&args, 1, span)?;
                 let other = expect_bytes(&args[0], span)?;
-                let mut result = Vec::with_capacity(bytes.len() + other.len());
+                let total = checked_bytes_total(bytes.len(), other.len(), span)?;
+                let mut result = Vec::with_capacity(total);
                 result.extend_from_slice(&bytes);
                 result.extend_from_slice(&other);
                 Ok(Value::Bytes(Rc::new(result)))
@@ -285,12 +288,14 @@ impl Interpreter {
             "append" => {
                 expect_arity(&args, 1, span)?;
                 let bytes = expect_bytes(&args[0], span)?;
+                checked_bytes_total(buffer.borrow().len(), bytes.len(), span)?;
                 buffer.borrow_mut().extend_from_slice(&bytes);
                 Ok(Value::Buffer(buffer))
             }
             "append_string" => {
                 expect_arity(&args, 1, span)?;
                 let value = expect_string(&args[0], span)?;
+                checked_bytes_total(buffer.borrow().len(), value.len(), span)?;
                 buffer.borrow_mut().extend_from_slice(value.as_bytes());
                 Ok(Value::Buffer(buffer))
             }
@@ -315,6 +320,7 @@ impl Interpreter {
             }
             "to_bytes" => {
                 expect_arity(&args, 0, span)?;
+                check_bytes_len(buffer.borrow().len(), span)?;
                 Ok(Value::Bytes(Rc::new(buffer.borrow().clone())))
             }
             "clear" => {

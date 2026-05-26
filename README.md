@@ -1,6 +1,6 @@
 # Icoo Lang R
 
-Icoo Lang R 是一个使用 Rust 实现的 Icoo 脚本语言解释器。Icoo 采用接近 Python 的缩进语法，提供动态执行、可选类型标注、类与单继承、一次赋值绑定、协程事件循环、本地模块系统和一组内置标准库。
+Icoo Lang R 是一个使用 Rust 实现的 Icoo 脚本语言解释器。Icoo 采用大括号代码块语法，提供动态执行、可选类型标注、类与单继承、一次赋值绑定、协程事件循环、本地模块系统和一组内置标准库。
 
 当前项目同时提供：
 
@@ -83,34 +83,42 @@ let count = 10
 final runtime_id: String
 runtime_id = "icoo-" + count.to_string()
 
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
-class Animal:
+}
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print("...")
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
     const KIND: String = "dog"
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print(self.name + " says woof")
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "Dog(" + self.name + ", " + self.breed + ")"
 
+    }
+}
 let dog = Dog("Lucky", "Border Collie", "U001")
 dog.speak()
 print(dog.to_string())
@@ -126,7 +134,7 @@ print(add(2, 3).to_string())
 
 ## 核心特性
 
-- 缩进代码块：使用缩进表达块结构。
+- 大括号代码块：使用 `{ ... }` 表达函数、类、条件、循环和错误处理块。
 - 绑定模型：支持 `let`、`const`、`final`。
 - 可选类型标注：支持 `Int`、`Float`、`String`、`Array<T>`、`Map<K, V>`、`Task<T>` 等标注。
 - 函数与闭包：支持函数声明、返回值检查和闭包捕获。
@@ -145,17 +153,21 @@ print(add(2, 3).to_string())
 ```python
 export const VERSION: String = "modules-1"
 
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
-export class User:
+}
+export class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "User(" + self.name + ")"
+    }
+}
 ```
 
 `main.icoo`：
@@ -182,14 +194,15 @@ print(user.to_string())
 ## 协程和事件循环
 
 ```python
-async fn worker(name: String) -> String:
+async fn worker(name: String) -> String {
     print(name + ": start")
     let delay = sleep(0)
     await delay
     print(name + ": end")
     return name
 
-async fn main() -> String:
+}
+async fn main() -> String {
     let loop = current_loop()
     let a = loop.spawn(worker("A"))
     let b = loop.spawn(worker("B"))
@@ -197,6 +210,7 @@ async fn main() -> String:
     let bv = await b
     return av + "+" + bv
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(main())
 print(loop.backend_name())
@@ -248,13 +262,15 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn home(req: Map<String, Any>, res: WebInoResponse):
+fn home(req: Map<String, Any>, res: WebInoResponse) {
     res.send("hello")
 
-fn user(req: Map<String, Any>, res: WebInoResponse):
+}
+fn user(req: Map<String, Any>, res: WebInoResponse) {
     let params = req.get("params")
     res.send("user=" + params.get("id"))
 
+}
 app.get("/", home)
 app.get("/users/:id", user)
 app.listen("127.0.0.1", 3000, 4)

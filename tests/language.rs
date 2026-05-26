@@ -55,27 +55,100 @@ runtime_id = "def"
 }
 
 #[test]
-fn supports_classes_inheritance_and_declared_fields() {
+fn supports_braced_blocks() {
     let output = run(r#"
-class Animal:
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
+        self.name = name
+    }
+}
+
+class Dog <- Animal {
+    let breed: String
+
+    fn init(self, name: String, breed: String) {
+        super.init(name)
+        self.breed = breed
+    }
+
+    fn label(self) -> String {
+        return self.name + ":" + self.breed
+    }
+}
+
+fn sign(value: Int) -> String {
+    if value < 0 {
+        return "negative"
+    } elif value == 0 {
+        return "zero"
+    } else {
+        return "positive"
+    }
+}
+
+let i = 0
+let total = 0
+while i < 4 {
+    i = i + 1
+    if i == 2 {
+        continue
+    }
+    total = total + i
+}
+
+try {
+    Bytes.from_hex("x")
+} catch err {
+    print("caught")
+}
+
+let dog = Dog("Lucky", "Collie")
+print(dog.label())
+print(sign(total))
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["caught", "Lucky:Collie", "positive"]);
+}
+
+#[test]
+fn rejects_indentation_blocks() {
+    let err = run(r#"
+fn old_style() -> Int:
+    return 1
+"#)
+    .unwrap_err();
+    assert!(err.contains("expected '{' before block"), "{err}");
+}
+
+#[test]
+fn supports_classes_inheritance_and_declared_fields() {
+    let output = run(r#"
+class Animal {
+    let name: String
+
+    fn init(self, name: String) {
         self.name = name
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
     const KIND: String = "dog"
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return self.name + ":" + self.breed + ":" + self.owner_id + ":" + self.KIND
 
+    }
+}
 let dog = Dog("Lucky", "Collie", "U001")
 print(dog.to_string())
 "#)
@@ -86,13 +159,15 @@ print(dog.to_string())
 #[test]
 fn rejects_undeclared_fields() {
     let err = run(r#"
-class User:
+class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
         self.email = "x@test.com"
 
+    }
+}
 let user = User("Tom")
 "#)
     .unwrap_err();
@@ -122,10 +197,11 @@ fn validates_names() {
     let err = run("const max_count = 1\n").unwrap_err();
     assert!(err.contains("constant name 'max_count'"));
 
-    let err = run("class user:\n    let name: String\n").unwrap_err();
+    let err = run("class user {\n    let name: String\n}\n").unwrap_err();
     assert!(err.contains("class name 'user'"));
 
-    let err = run("class User:\n    fn getName(self):\n        return nil\n").unwrap_err();
+    let err =
+        run("class User {\n    fn getName(self) {\n        return nil\n    }\n}\n").unwrap_err();
     assert!(err.contains("method name 'getName'"));
 }
 
@@ -162,13 +238,14 @@ print(multi.contains("next=4").to_string())
 #[test]
 fn supports_event_loop_async_functions_and_await() {
     let output = run(r#"
-async fn worker(name: String) -> String:
+async fn worker(name: String) -> String {
     print(name + ":start")
     let delay = sleep(0)
     await delay
     print(name + ":end")
     return name
 
+}
 let loop = EventLoop(2)
 let a = loop.spawn(worker("A"))
 let b = loop.spawn(worker("B"))
@@ -188,18 +265,20 @@ print(b.result())
 #[test]
 fn supports_awaiting_tasks_inside_coroutines() {
     let output = run(r#"
-async fn child() -> String:
+async fn child() -> String {
     let delay = sleep(1)
     await delay
     return "child_done"
 
-async fn parent() -> String:
+}
+async fn parent() -> String {
     let loop = current_loop()
     let task = loop.spawn(child())
     let value = await task
     print(value)
     return "parent:" + value
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(parent())
 print(loop.run_until(task))
@@ -220,15 +299,17 @@ fn resolver_rejects_invalid_control_flow() {
     assert!(err.contains("resolve error: continue can only be used inside a loop"));
 
     let err = run(r#"
-fn bad():
+fn bad() {
     await sleep(0)
+}
 "#)
     .unwrap_err();
     assert!(err.contains("resolve error: await can only be used inside an async fn"));
 
     let err = run(r#"
-fn bad():
+fn bad() {
     yield
+}
 "#)
     .unwrap_err();
     assert!(err.contains("resolve error: yield can only be used inside an async fn"));
@@ -237,15 +318,18 @@ fn bad():
 #[test]
 fn resolver_allows_loop_control_inside_async_functions() {
     let output = run(r#"
-async fn count_until_two() -> Int:
+async fn count_until_two() -> Int {
     let i = 0
-    while i < 10:
+    while i < 10 {
         i = i + 1
-        if i < 2:
+        if i < 2 {
             continue
+        }
         break
+    }
     return i
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(count_until_two())
 print(loop.run_until(task).to_string())
@@ -263,30 +347,34 @@ let age: Int = "old"
     assert!(err.contains("type error: expected Int for binding 'age' but got String"));
 
     let err = run(r#"
-fn add_one(value: Int) -> Int:
+fn add_one(value: Int) -> Int {
     return value + 1
 
+}
 print(add_one("x"))
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected Int for argument 1 but got String"));
 
     let err = run(r#"
-fn bad() -> Int:
+fn bad() -> Int {
     return "x"
 
+}
 print(bad())
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected Int for return value but got String"));
 
     let err = run(r#"
-class User:
+class User {
     let age: Int
 
-    fn init(self):
+    fn init(self) {
         self.age = "old"
 
+    }
+}
 let user = User()
 "#)
     .unwrap_err();
@@ -296,9 +384,10 @@ let user = User()
 #[test]
 fn checks_async_return_types_and_class_type_assignability() {
     let err = run(r#"
-async fn bad() -> String:
+async fn bad() -> String {
     return 1
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(bad())
 loop.run_until(task)
@@ -307,22 +396,27 @@ loop.run_until(task)
     assert!(err.contains("type error: expected String for return value but got Int"));
 
     let output = run(r#"
-class Animal:
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
 
-    fn init(self, name: String, breed: String):
+    fn init(self, name: String, breed: String) {
         super.init(name)
         self.breed = breed
 
-fn describe(animal: Animal) -> String:
+    }
+}
+fn describe(animal: Animal) -> String {
     return animal.name
 
+}
 print(describe(Dog("Lucky", "Collie")))
 "#)
     .unwrap();
@@ -332,8 +426,9 @@ print(describe(Dog("Lucky", "Collie")))
 #[test]
 fn typechecker_rejects_obvious_field_initializers_and_assignments() {
     let err = run(r#"
-class Config:
+class Config {
     const PORT: Int = "8080"
+}
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected Int for field 'PORT' but got String"));
@@ -349,14 +444,16 @@ count = "two"
 #[test]
 fn typechecker_tracks_async_task_result_types() {
     let err = run(r#"
-async fn name() -> String:
+async fn name() -> String {
     return "Icoo"
 
-async fn main() -> Nil:
+}
+async fn main() -> Nil {
     let loop = current_loop()
     let task = loop.spawn(name())
     let value: Int = await task
 
+}
 let loop = EventLoop(2)
 loop.run_until(loop.spawn(main()))
 "#)
@@ -364,9 +461,10 @@ loop.run_until(loop.spawn(main()))
     assert!(err.contains("type error: expected Int for binding 'value' but got String"));
 
     let err = run(r#"
-async fn name() -> String:
+async fn name() -> String {
     return "Icoo"
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(name())
 let value: Int = loop.run_until(task)
@@ -375,9 +473,10 @@ let value: Int = loop.run_until(task)
     assert!(err.contains("type error: expected Int for binding 'value' but got String"));
 
     let err = run(r#"
-async fn name() -> String:
+async fn name() -> String {
     return "Icoo"
 
+}
 let loop = EventLoop(2)
 let task = loop.spawn(name())
 loop.run()
@@ -437,9 +536,10 @@ fn typechecker_supports_generic_type_annotations() {
 let values: Array<Int> = [1, 2, 3]
 let scores: Map<String, Int> = {"Tom": 95}
 
-async fn name() -> String:
+async fn name() -> String {
     return "Icoo"
 
+}
 let loop = EventLoop(2)
 let task: Task<String> = loop.spawn(name())
 print(values.join("-"))
@@ -464,9 +564,10 @@ let scores: Map<String, Int> = {"Tom": "A"}
     ));
 
     let err = run(r#"
-async fn name() -> String:
+async fn name() -> String {
     return "Icoo"
 
+}
 let loop = EventLoop(2)
 let task: Task<Int> = loop.spawn(name())
 "#)
@@ -724,17 +825,21 @@ fn supports_file_modules_imports_and_exports() {
 const SECRET: String = "hidden"
 export const VERSION: String = "1.0.0"
 
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
-export class User:
+}
+export class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return self.name
+    }
+}
 "#,
     )
     .unwrap();
@@ -905,10 +1010,11 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn home(req: Map<String, Any>, res: WebInoResponse):
+fn home(req: Map<String, Any>, res: WebInoResponse) {{
     res.status(201)
     res.send("hello " + req.get("path"))
 
+}}
 app.get("/hello", home)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -967,9 +1073,10 @@ import "std.web.ino" as ino
 
 let app = ino.create()
 
-fn echo(req: Map<String, Any>, res: WebInoResponse):
+fn echo(req: Map<String, Any>, res: WebInoResponse) {{
     res.send("path=" + req.get("path"))
 
+}}
 app.get("/a", echo)
 app.get("/b", echo)
 app.listen("127.0.0.1", {}, 2)
@@ -1049,18 +1156,21 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn echo(req: Map<String, Any>, res: WebInoResponse):
+fn echo(req: Map<String, Any>, res: WebInoResponse) {{
     res.send(req.get("method") + ":" + req.get("body"))
 
-fn empty(req: Map<String, Any>, res: WebInoResponse):
+}}
+fn empty(req: Map<String, Any>, res: WebInoResponse) {{
     res.send(req.get("method") + ":" + req.get("path"))
 
-fn stream_put(req: Map<String, Any>, res: WebInoResponse):
+}}
+fn stream_put(req: Map<String, Any>, res: WebInoResponse) {{
     res.write(req.get("method"))
     res.write(":")
     res.write(req.get("body"))
     res.end()
 
+}}
 app.put("/item", echo)
 app.delete("/item", empty)
 app.options("/item", empty)
@@ -1087,9 +1197,10 @@ let delete_response = client.delete("http://127.0.0.1:{}/item")
 let options_response = client.options("http://127.0.0.1:{}/item")
 let chunks = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {{
     chunks.push(chunk)
 
+}}
 let stream_response = client.stream_put("http://127.0.0.1:{}/stream", "streamed", on_chunk)
 print(put_response.get("body"))
 print(delete_response.get("body"))
@@ -1123,18 +1234,18 @@ fn supports_std_web_ino_file_uploads() {
     let server_path = dir.join("server.icoo");
     fs::write(
         &server_path,
-        format!(
-            r#"
+        format!(r#"
 import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn upload(req: Map<String, Any>, res: WebInoResponse):
+fn upload(req: Map<String, Any>, res: WebInoResponse) {{
     let form = req.get("form")
     let files = req.get("files")
     let file = files.get("avatar")
     res.json({{"title": form.get("title"), "filename": file.get("filename"), "content_type": file.get("content_type"), "content": file.get("content"), "size": file.get("size")}})
 
+}}
 app.post("/upload", upload)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -1184,12 +1295,13 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn stream(req: Map<String, Any>, res: WebInoResponse):
+fn stream(req: Map<String, Any>, res: WebInoResponse) {{
     res.write("hello")
     res.write(" ")
     res.write(req.get("path"))
     res.end()
 
+}}
 app.get("/stream", stream)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -1234,12 +1346,13 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn stream(req: Map<String, Any>, res: WebInoResponse):
+fn stream(req: Map<String, Any>, res: WebInoResponse) {{
     res.write("a")
     res.write("b")
     res.write("c")
     res.end()
 
+}}
 app.get("/stream", stream)
 app.listen_once("127.0.0.1", {})
 "#,
@@ -1260,9 +1373,10 @@ import "std.net.http.client" as client
 
 let parts = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {{
     parts.push(chunk)
 
+}}
 let response = client.stream_get("http://127.0.0.1:{}/stream", on_chunk)
 print(response.get("status").to_string())
 print(response.get("headers").get("transfer-encoding"))
@@ -1296,9 +1410,10 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn download(req: Map<String, Any>, res: WebInoResponse):
+fn download(req: Map<String, Any>, res: WebInoResponse) {{
     res.download("{}", "export.bin")
 
+}}
 app.get("/download", download)
 app.listen_once("127.0.0.1", {})
 "#,

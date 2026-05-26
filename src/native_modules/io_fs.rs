@@ -2,6 +2,7 @@ use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_bytes, expect_string, Interpreter};
 use crate::lexer::token::Span;
+use crate::runtime::limits::check_bytes_len;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
 use std::io::Write;
@@ -133,11 +134,11 @@ fn dispatch(
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
             runtime.permissions().check_fs_read(span)?;
-            std::fs::read(&path)
-                .map(|bytes| Value::Bytes(Rc::new(bytes)))
-                .map_err(|err| {
-                    IcooError::runtime(format!("io.fs.read_bytes() failed: {}", err), Some(span))
-                })
+            let bytes = std::fs::read(&path).map_err(|err| {
+                IcooError::runtime(format!("io.fs.read_bytes() failed: {}", err), Some(span))
+            })?;
+            check_bytes_len(bytes.len(), span)?;
+            Ok(Value::Bytes(Rc::new(bytes)))
         }
         "write_text" => {
             expect_arity(&args, 2, span)?;

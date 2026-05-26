@@ -4,6 +4,7 @@ use super::{
 };
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::runtime::limits::check_web_ino_request_len;
 use crate::runtime::value::{Value, WebInoApp, WebInoResponse, WebInoRoute};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -391,9 +392,11 @@ impl Interpreter {
                 Some(span),
             )
         })?;
-        let request = read_web_ino_request_bytes(&mut stream)
-            .map_err(|message| IcooError::runtime(message, Some(span)))?;
-        self.web_ino_handle_request(app, &request, &mut stream, span)
+        let request = read_web_ino_request_bytes(&mut stream);
+        match request {
+            Ok(request) => self.web_ino_handle_request(app, &request, &mut stream, span),
+            Err(message) => web_ino_write_bad_request(&mut stream, message, span),
+        }
     }
 
     fn web_ino_listen(
@@ -467,29 +470,7 @@ impl Interpreter {
                 WebInoAccepted::Request {
                     request: Err(message),
                     mut stream,
-                } => {
-                    let response = WebInoResponse {
-                        status: 400,
-                        body: message,
-                        body_bytes: None,
-                        chunks: Vec::new(),
-                        content_type: "text/plain; charset=utf-8".to_string(),
-                        content_type_overridden: false,
-                        headers: HashMap::new(),
-                        sent: true,
-                        streaming: false,
-                        headers_sent: false,
-                        stream_ended: false,
-                        writer: None,
-                    };
-                    let response_bytes = web_ino_http_response(&response);
-                    std::io::Write::write_all(&mut stream, &response_bytes).map_err(|err| {
-                        IcooError::runtime(
-                            format!("web.ino response write failed: {}", err),
-                            Some(span),
-                        )
-                    })?;
-                }
+                } => web_ino_write_bad_request(&mut stream, message, span)?,
                 WebInoAccepted::AcceptError(message) => {
                     let _ = accept_handle.join();
                     return Err(IcooError::runtime(message, Some(span)));
@@ -574,6 +555,34 @@ impl Interpreter {
     }
 }
 
+fn web_ino_write_bad_request(
+    stream: &mut std::net::TcpStream,
+    message: String,
+    span: Span,
+) -> IcooResult<()> {
+    let response = WebInoResponse {
+        status: 400,
+        body: message,
+        body_bytes: None,
+        chunks: Vec::new(),
+        content_type: "text/plain; charset=utf-8".to_string(),
+        content_type_overridden: false,
+        headers: HashMap::new(),
+        sent: true,
+        streaming: false,
+        headers_sent: false,
+        stream_ended: false,
+        writer: None,
+    };
+    let response_bytes = web_ino_http_response(&response);
+    std::io::Write::write_all(stream, &response_bytes).map_err(|err| {
+        IcooError::runtime(
+            format!("web.ino response write failed: {}", err),
+            Some(span),
+        )
+    })
+}
+
 fn read_web_ino_request_bytes(stream: &mut std::net::TcpStream) -> Result<Vec<u8>, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -592,6 +601,10 @@ fn read_web_ino_request_bytes(stream: &mut std::net::TcpStream) -> Result<Vec<u8
         };
         let head = String::from_utf8_lossy(&bytes[..body_start]);
         let content_length = http_content_length(&head);
+        if let Some(length) = content_length {
+            check_web_ino_request_len(length)?;
+        }
+        check_web_ino_request_len(bytes.len().saturating_sub(body_start))?;
         if content_length
             .map(|length| bytes.len() >= body_start + length)
             .unwrap_or(true)
@@ -610,6 +623,8 @@ fn parse_web_ino_request(request: &[u8], span: Span) -> IcooResult<ParsedWebInoR
     } else {
         Vec::new()
     };
+    check_web_ino_request_len(body_bytes.len())
+        .map_err(|message| IcooError::runtime(message, Some(span)))?;
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
     let mut lines = head.lines();
     let request_line = lines.next().ok_or_else(|| {

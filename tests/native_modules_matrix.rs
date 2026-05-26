@@ -273,9 +273,10 @@ import "std.web.ino" as ino
 
 let app = ino.create()
 
-fn handler(req: Map<String, Any>, res: WebInoResponse):
+fn handler(req: Map<String, Any>, res: WebInoResponse) {
     res.send("ok")
 
+}
 print(app.type_name())
 print(app.get("/health", handler).type_name())
 print(ino.App().type_name())

@@ -2,6 +2,9 @@ use super::http_common::{ensure_http_header_name_value_no_crlf, find_http_body_s
 use super::Interpreter;
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use crate::runtime::limits::{
+    check_http_body_len, check_http_stream_chunk_len, MAX_HTTP_BODY_BYTES,
+};
 use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::Value;
 use std::cell::RefCell;
@@ -120,9 +123,9 @@ fn http_method_has_request_body(method: &str) -> bool {
 
 pub(crate) fn http_stream_method_name(method_name: &str) -> &'static str {
     match method_name {
-        "stream_get" => "GET",
-        "stream_post" => "POST",
-        "stream_put" => "PUT",
+        "stream_get" | "stream_get_bytes" => "GET",
+        "stream_post" | "stream_post_bytes" => "POST",
+        "stream_put" | "stream_put_bytes" => "PUT",
         "stream_delete" => "DELETE",
         "stream_options" => "OPTIONS",
         _ => "GET",
@@ -225,6 +228,49 @@ impl Interpreter {
         ))
     }
 
+    pub(crate) fn http_client_stream_request_bytes(
+        &mut self,
+        method: &str,
+        url: &str,
+        body: &[u8],
+        headers: &HttpClientHeaders,
+        handler: Value,
+        span: Span,
+    ) -> IcooResult<Value> {
+        let mut stream = open_http_client_request(
+            &self.permissions,
+            method,
+            url,
+            body,
+            Some("application/octet-stream"),
+            headers,
+            span,
+        )?;
+        let response = read_http_response_head(&mut stream, span)?;
+        let chunk_count = if http_headers_transfer_chunked(&response.headers) {
+            http_client_stream_chunked(&mut stream, response.body_prefix, span, |chunk| {
+                self.call_http_stream_bytes_handler(&handler, chunk, span)
+            })?
+        } else if let Some(content_length) = http_headers_content_length(&response.headers) {
+            http_client_stream_content_length(
+                &mut stream,
+                response.body_prefix,
+                content_length,
+                span,
+                |chunk| self.call_http_stream_bytes_handler(&handler, chunk, span),
+            )?
+        } else {
+            http_client_stream_until_close(&mut stream, response.body_prefix, span, |chunk| {
+                self.call_http_stream_bytes_handler(&handler, chunk, span)
+            })?
+        };
+        Ok(http_client_stream_response_value(
+            response.status,
+            response.headers,
+            chunk_count,
+        ))
+    }
+
     fn call_http_stream_handler(
         &mut self,
         handler: &Value,
@@ -233,6 +279,16 @@ impl Interpreter {
     ) -> IcooResult<()> {
         let text = String::from_utf8_lossy(&chunk).into_owned();
         self.call_value(handler.clone(), vec![Value::String(text)], span)
+            .map(|_| ())
+    }
+
+    fn call_http_stream_bytes_handler(
+        &mut self,
+        handler: &Value,
+        chunk: Vec<u8>,
+        span: Span,
+    ) -> IcooResult<()> {
+        self.call_value(handler.clone(), vec![Value::Bytes(Rc::new(chunk))], span)
             .map(|_| ())
     }
 }
@@ -281,9 +337,19 @@ fn read_http_response(
     span: Span,
 ) -> IcooResult<ParsedHttpResponse> {
     let mut response = Vec::new();
-    std::io::Read::read_to_end(stream, &mut response).map_err(|err| {
-        IcooError::runtime(format!("http client read failed: {}", err), Some(span))
-    })?;
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let size = std::io::Read::read(stream, &mut buffer).map_err(|err| {
+            IcooError::runtime(format!("http client read failed: {}", err), Some(span))
+        })?;
+        if size == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..size]);
+        if let Some(body_start) = find_http_body_start(&response) {
+            check_http_body_len(response.len().saturating_sub(body_start), span)?;
+        }
+    }
     let body_start = find_http_body_start(&response).ok_or_else(|| {
         IcooError::runtime(
             "invalid HTTP response: missing header terminator",
@@ -295,7 +361,9 @@ fn read_http_response(
     let body = if http_headers_transfer_chunked(&headers) {
         decode_chunked_bytes(&response[body_start..], span)?
     } else {
-        response[body_start..].to_vec()
+        let body = response[body_start..].to_vec();
+        check_http_body_len(body.len(), span)?;
+        body
     };
     Ok(ParsedHttpResponse {
         status,
@@ -403,6 +471,13 @@ fn decode_chunked_bytes(bytes: &[u8], span: Span) -> IcooResult<Vec<u8>> {
                 Some(span),
             ));
         }
+        let total = decoded.len().checked_add(size).ok_or_else(|| {
+            IcooError::runtime(
+                "http response body exceeds maximum size: overflow",
+                Some(span),
+            )
+        })?;
+        check_http_body_len(total, span)?;
         decoded.extend_from_slice(&bytes[index..index + size]);
         index += size;
         if bytes.get(index..index + 2) != Some(b"\r\n") {
@@ -458,6 +533,7 @@ where
             ));
         }
         let chunk = buffer[..size].to_vec();
+        check_http_stream_chunk_len(chunk.len(), span)?;
         buffer.drain(..size + 2);
         on_chunk(chunk)?;
         chunk_count += 1;
@@ -479,6 +555,7 @@ where
     let mut delivered = 0;
     if !buffer.is_empty() && content_length > 0 {
         let size = buffer.len().min(content_length);
+        check_http_stream_chunk_len(size, span)?;
         on_chunk(buffer[..size].to_vec())?;
         delivered += size;
         chunk_count += 1;
@@ -498,6 +575,7 @@ where
                 Some(span),
             ));
         }
+        check_http_stream_chunk_len(size, span)?;
         on_chunk(read_buffer[..size].to_vec())?;
         delivered += size;
         chunk_count += 1;
@@ -516,6 +594,7 @@ where
 {
     let mut chunk_count = 0;
     if !buffer.is_empty() {
+        check_http_stream_chunk_len(buffer.len(), span)?;
         on_chunk(buffer)?;
         chunk_count += 1;
     }
@@ -530,6 +609,7 @@ where
         if size == 0 {
             break;
         }
+        check_http_stream_chunk_len(size, span)?;
         on_chunk(read_buffer[..size].to_vec())?;
         chunk_count += 1;
     }
@@ -555,5 +635,14 @@ fn read_more_http_stream_bytes(
         ));
     }
     buffer.extend_from_slice(&read_buffer[..size]);
+    if buffer.len() > MAX_HTTP_BODY_BYTES + 4096 {
+        return Err(IcooError::runtime(
+            format!(
+                "http response body exceeds maximum size: buffered stream data exceeded {} bytes",
+                MAX_HTTP_BODY_BYTES
+            ),
+            Some(span),
+        ));
+    }
     Ok(())
 }

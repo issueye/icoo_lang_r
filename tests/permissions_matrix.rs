@@ -245,9 +245,10 @@ fn web_ino_download_checks_fs_read_permission_inside_handler() {
 
 let app = ino.App()
 
-fn download(req: Map<String, Any>, res: WebInoResponse):
+fn download(req: Map<String, Any>, res: WebInoResponse) {{
     res.download("{}")
 
+}}
 app.get("/download", download)
 app.listen_once("127.0.0.1", {})"#,
         script_path, port
