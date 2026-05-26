@@ -1,4 +1,8 @@
+use super::http_alpn::{negotiated_http_protocol, HttpAlpnPolicy, NegotiatedHttpProtocol};
 use super::http_common::{ensure_http_header_name_value_no_crlf, find_http_body_start};
+use super::http_proxy::{HttpProxyConfig as ProxyRequestConfig, HttpProxyTarget};
+use super::http_redirect;
+use super::http_url::{HttpScheme, ParsedHttpUrl};
 use super::Interpreter;
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
@@ -10,22 +14,9 @@ use rustls::pki_types::ServerName;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HttpScheme {
-    Http,
-    Https,
-}
-
-struct ParsedHttpUrl {
-    scheme: HttpScheme,
-    host: String,
-    port: u16,
-    path: String,
-}
 
 enum HttpClientStream {
     Plain(std::net::TcpStream),
@@ -77,51 +68,14 @@ impl Interpreter {
             Some(roots) => roots.as_ref().clone(),
             None => native_root_store(span)?,
         };
-        let config = Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
+        let mut config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        config.alpn_protocols = HttpAlpnPolicy::default().rustls_protocols();
+        let config = Arc::new(config);
         *self.http_tls_config.borrow_mut() = Some(config.clone());
         Ok(config)
     }
-}
-
-fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
-    let (scheme, rest, default_port) = if let Some(rest) = url.strip_prefix("http://") {
-        (HttpScheme::Http, rest, 80)
-    } else if let Some(rest) = url.strip_prefix("https://") {
-        (HttpScheme::Https, rest, 443)
-    } else {
-        return Err(IcooError::runtime(
-            "only http:// and https:// URLs are supported",
-            Some(span),
-        ));
-    };
-    let (host_port, path) = rest
-        .split_once('/')
-        .map(|(host, path)| (host, format!("/{}", path)))
-        .unwrap_or((rest, "/".to_string()));
-    if host_port.is_empty() {
-        return Err(IcooError::runtime("URL host is required", Some(span)));
-    }
-    let (host, port) = if let Some((host, port)) = host_port.rsplit_once(':') {
-        if host.is_empty() {
-            return Err(IcooError::runtime("URL host is required", Some(span)));
-        }
-        let port = port
-            .parse::<u16>()
-            .map_err(|_| IcooError::runtime("URL port must be between 1 and 65535", Some(span)))?;
-        (host.to_string(), port)
-    } else {
-        (host_port.to_string(), default_port)
-    };
-    Ok(ParsedHttpUrl {
-        scheme,
-        host,
-        port,
-        path,
-    })
 }
 
 fn open_http_client_request(
@@ -133,19 +87,36 @@ fn open_http_client_request(
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<HttpClientStream> {
-    let parsed = parse_http_url(url, span)?;
+    let parsed = ParsedHttpUrl::parse(url, span)?;
     let custom_headers = http_client_headers_text(headers, span)?;
     runtime
         .permissions()
         .check_net_connect_endpoint(&parsed.host, parsed.port, span)?;
-    let mut stream = open_http_client_stream(runtime, &parsed, span)?;
+    let proxy = runtime_http_proxy_config(runtime, span)?;
+    if let Some(proxy) = &proxy {
+        runtime
+            .permissions()
+            .check_net_connect_endpoint(proxy.host(), proxy.port(), span)?;
+    }
+    let request_target = http_request_target(&parsed, proxy.as_ref(), span)?;
+    let proxy_authorization = if parsed.scheme == HttpScheme::Http {
+        proxy
+            .as_ref()
+            .and_then(|proxy| proxy.authorization())
+            .map(str::to_string)
+    } else {
+        None
+    };
+    let mut stream = open_http_client_stream(runtime, &parsed, proxy.as_ref(), span)?;
     write_http_request(
         &mut stream,
         &parsed,
+        &request_target,
         method,
         body,
         content_type,
         &custom_headers,
+        proxy_authorization.as_deref(),
         span,
     )?;
     Ok(stream)
@@ -154,19 +125,21 @@ fn open_http_client_request(
 fn open_http_client_stream(
     runtime: &Interpreter,
     parsed: &ParsedHttpUrl,
+    proxy: Option<&ProxyRequestConfig>,
     span: Span,
 ) -> IcooResult<HttpClientStream> {
-    let mut tcp =
-        std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
-            IcooError::runtime(
-                format!("http client connection failed: {}", err),
-                Some(span),
-            )
-        })?;
-    let timeout = Some(Duration::from_secs(5));
-    tcp.set_read_timeout(timeout)
-        .and_then(|_| tcp.set_write_timeout(timeout))
-        .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
+    let mut tcp = if let Some(proxy) = proxy {
+        connect_http_tcp(runtime, proxy.host(), proxy.port(), span)?
+    } else {
+        connect_http_tcp_authority(runtime, &parsed.connect_host(), span)?
+    };
+
+    if let Some(proxy) = proxy {
+        if parsed.scheme == HttpScheme::Https {
+            establish_https_proxy_tunnel(&mut tcp, parsed, proxy, span)?;
+        }
+    }
+
     if parsed.scheme == HttpScheme::Http {
         return Ok(HttpClientStream::Plain(tcp));
     }
@@ -186,9 +159,178 @@ fn open_http_client_stream(
             Some(span),
         )
     })?;
+    match negotiated_http_protocol(connection.alpn_protocol()) {
+        NegotiatedHttpProtocol::Http11 => {}
+        NegotiatedHttpProtocol::H2 => {
+            return Err(IcooError::runtime(
+                "https client negotiated HTTP/2 via ALPN, but HTTP/2 is not supported by this blocking client yet",
+                Some(span),
+            ))
+        }
+        NegotiatedHttpProtocol::Unknown => {
+            return Err(IcooError::runtime(
+                "https client negotiated unsupported ALPN protocol",
+                Some(span),
+            ))
+        }
+    }
     Ok(HttpClientStream::Tls(Box::new(rustls::StreamOwned::new(
         connection, tcp,
     ))))
+}
+
+fn connect_http_tcp(
+    runtime: &Interpreter,
+    host: &str,
+    port: u16,
+    span: Span,
+) -> IcooResult<TcpStream> {
+    let authority = socket_authority(host, port);
+    connect_http_tcp_authority(runtime, &authority, span)
+}
+
+fn connect_http_tcp_authority(
+    runtime: &Interpreter,
+    authority: &str,
+    span: Span,
+) -> IcooResult<TcpStream> {
+    let addrs = authority.to_socket_addrs().map_err(|err| {
+        IcooError::runtime(
+            format!("http client connection failed: {}", err),
+            Some(span),
+        )
+    })?;
+    let mut last_error = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, runtime.http_config().connect_timeout) {
+            Ok(stream) => {
+                stream
+                    .set_read_timeout(Some(runtime.http_config().read_timeout))
+                    .and_then(|_| {
+                        stream.set_write_timeout(Some(runtime.http_config().write_timeout))
+                    })
+                    .map_err(|err| {
+                        IcooError::runtime(format!("http client failed: {}", err), Some(span))
+                    })?;
+                return Ok(stream);
+            }
+            Err(err) => last_error = Some(err),
+        }
+    }
+    let message = last_error
+        .map(|err| err.to_string())
+        .unwrap_or_else(|| "no socket address resolved".to_string());
+    Err(IcooError::runtime(
+        format!("http client connection failed: {}", message),
+        Some(span),
+    ))
+}
+
+fn socket_authority(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
+    }
+}
+
+fn runtime_http_proxy_config(
+    runtime: &Interpreter,
+    span: Span,
+) -> IcooResult<Option<ProxyRequestConfig>> {
+    runtime
+        .http_config()
+        .proxy
+        .as_ref()
+        .map(|proxy| {
+            ProxyRequestConfig::new(proxy.host.clone(), proxy.port, proxy.authorization.clone())
+                .map_err(|err| IcooError::runtime(err, Some(span)))
+        })
+        .transpose()
+}
+
+fn http_request_target(
+    parsed: &ParsedHttpUrl,
+    proxy: Option<&ProxyRequestConfig>,
+    span: Span,
+) -> IcooResult<String> {
+    if parsed.scheme == HttpScheme::Http && proxy.is_some() {
+        let target = HttpProxyTarget::new(parsed.host.clone(), parsed.port)
+            .map_err(|err| IcooError::runtime(err, Some(span)))?;
+        Ok(target.absolute_form_http_target(&parsed.path))
+    } else {
+        Ok(parsed.path.clone())
+    }
+}
+
+fn establish_https_proxy_tunnel(
+    tcp: &mut TcpStream,
+    parsed: &ParsedHttpUrl,
+    proxy: &ProxyRequestConfig,
+    span: Span,
+) -> IcooResult<()> {
+    let target = HttpProxyTarget::new(parsed.host.clone(), parsed.port)
+        .map_err(|err| IcooError::runtime(err, Some(span)))?;
+    let request = target.connect_request(proxy);
+    tcp.write_all(request.as_bytes()).map_err(|err| {
+        IcooError::runtime(
+            format!("http proxy CONNECT write failed: {}", err),
+            Some(span),
+        )
+    })?;
+    tcp.flush().map_err(|err| {
+        IcooError::runtime(
+            format!("http proxy CONNECT write failed: {}", err),
+            Some(span),
+        )
+    })?;
+    let status = read_proxy_connect_status(tcp, span)?;
+    if !(200..300).contains(&status) {
+        return Err(IcooError::runtime(
+            format!("http proxy CONNECT failed with status {}", status),
+            Some(span),
+        ));
+    }
+    Ok(())
+}
+
+fn read_proxy_connect_status(tcp: &mut TcpStream, span: Span) -> IcooResult<i64> {
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 512];
+    loop {
+        let size = tcp.read(&mut buffer).map_err(|err| {
+            IcooError::runtime(
+                format!("http proxy CONNECT read failed: {}", err),
+                Some(span),
+            )
+        })?;
+        if size == 0 {
+            return Err(IcooError::runtime(
+                "invalid HTTP proxy CONNECT response: missing header terminator",
+                Some(span),
+            ));
+        }
+        response.extend_from_slice(&buffer[..size]);
+        if find_http_body_start(&response).is_some() {
+            break;
+        }
+    }
+    let head_end = find_http_body_start(&response).expect("checked above") - 4;
+    let head = String::from_utf8_lossy(&response[..head_end]);
+    let status_line = head.lines().next().ok_or_else(|| {
+        IcooError::runtime(
+            "invalid HTTP proxy CONNECT response: missing status",
+            Some(span),
+        )
+    })?;
+    status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| {
+            IcooError::runtime("invalid HTTP proxy CONNECT response status", Some(span))
+        })?
+        .parse::<i64>()
+        .map_err(|_| IcooError::runtime("invalid HTTP proxy CONNECT response status", Some(span)))
 }
 
 fn native_root_store(span: Span) -> IcooResult<rustls::RootCertStore> {
@@ -226,23 +368,27 @@ fn native_root_store(span: Span) -> IcooResult<rustls::RootCertStore> {
 fn write_http_request(
     stream: &mut HttpClientStream,
     parsed: &ParsedHttpUrl,
+    request_target: &str,
     method: &str,
     body: &[u8],
     content_type: Option<&str>,
     custom_headers: &str,
+    proxy_authorization: Option<&str>,
     span: Span,
 ) -> IcooResult<()> {
-    let host = http_host_header(parsed);
+    let host = parsed.host_header();
+    let proxy_authorization = proxy_authorization_header(proxy_authorization, span)?;
     if http_method_has_request_body(method) {
         let content_type = content_type.unwrap_or("application/octet-stream");
         let head = format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: {}\r\n{}\r\n",
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: {}\r\n{}{}\r\n",
             method,
-            parsed.path,
+            request_target,
             host,
             body.len(),
             content_type,
             custom_headers,
+            proxy_authorization,
         );
         stream.write_all(head.as_bytes()).map_err(|err| {
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
@@ -252,8 +398,8 @@ fn write_http_request(
         })?;
     } else {
         let request = format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}\r\n",
-            method, parsed.path, host, custom_headers
+            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}{}\r\n",
+            method, request_target, host, custom_headers, proxy_authorization
         );
         stream.write_all(request.as_bytes()).map_err(|err| {
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
@@ -264,16 +410,12 @@ fn write_http_request(
         .map_err(|err| IcooError::runtime(format!("http client write failed: {}", err), Some(span)))
 }
 
-fn http_host_header(parsed: &ParsedHttpUrl) -> String {
-    let default_port = match parsed.scheme {
-        HttpScheme::Http => 80,
-        HttpScheme::Https => 443,
+fn proxy_authorization_header(authorization: Option<&str>, span: Span) -> IcooResult<String> {
+    let Some(authorization) = authorization else {
+        return Ok(String::new());
     };
-    if parsed.port == default_port {
-        parsed.host.clone()
-    } else {
-        format!("{}:{}", parsed.host, parsed.port)
-    }
+    ensure_http_header_name_value_no_crlf("Proxy-Authorization", authorization, span)?;
+    Ok(format!("Proxy-Authorization: {}\r\n", authorization))
 }
 
 fn http_client_headers_text(headers: &HttpClientHeaders, span: Span) -> IcooResult<String> {
@@ -311,22 +453,16 @@ pub(crate) fn http_client_request(
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<Value> {
-    let mut stream = open_http_client_request(
+    http_client_request_raw(
         runtime,
         method,
         url,
         body.as_bytes(),
         Some("text/plain; charset=utf-8"),
         headers,
-        span,
-    )?;
-    let response = read_http_response(&mut stream, span)?;
-    Ok(http_client_response_value(
-        response.status,
-        response.headers,
-        response.body,
         false,
-    ))
+        span,
+    )
 }
 
 pub(crate) fn http_client_request_bytes(
@@ -337,22 +473,94 @@ pub(crate) fn http_client_request_bytes(
     headers: &HttpClientHeaders,
     span: Span,
 ) -> IcooResult<Value> {
-    let mut stream = open_http_client_request(
+    http_client_request_raw(
         runtime,
         method,
         url,
         body,
         Some("application/octet-stream"),
         headers,
-        span,
-    )?;
-    let response = read_http_response(&mut stream, span)?;
-    Ok(http_client_response_value(
-        response.status,
-        response.headers,
-        response.body,
         true,
-    ))
+        span,
+    )
+}
+
+fn http_client_request_raw(
+    runtime: &Interpreter,
+    method: &str,
+    url: &str,
+    body: &[u8],
+    content_type: Option<&str>,
+    headers: &HttpClientHeaders,
+    bytes_body: bool,
+    span: Span,
+) -> IcooResult<Value> {
+    let mut current_method = method.to_string();
+    let mut current_url = url.to_string();
+    let mut current_body = body.to_vec();
+    let mut current_content_type = content_type.map(str::to_string);
+    let mut redirect_count = 0;
+
+    loop {
+        let mut stream = open_http_client_request(
+            runtime,
+            &current_method,
+            &current_url,
+            &current_body,
+            current_content_type.as_deref(),
+            headers,
+            span,
+        )?;
+        let response = read_http_response(&mut stream, span)?;
+        let max_redirects = runtime.http_config().max_redirects;
+        if max_redirects == 0 || !http_redirect::is_redirect_status(response.status) {
+            return Ok(http_client_response_value(
+                response.status,
+                response.headers,
+                response.body,
+                bytes_body,
+            ));
+        }
+
+        let redirect_headers = http_redirect_headers(&response.headers);
+        let redirect = http_redirect::redirect_request(
+            response.status,
+            &redirect_headers,
+            &current_url,
+            &current_method,
+            &current_body,
+            redirect_count,
+            max_redirects,
+        )
+        .map_err(|err| {
+            IcooError::runtime(format!("http client redirect failed: {}", err), Some(span))
+        })?;
+        let Some(redirect) = redirect else {
+            return Ok(http_client_response_value(
+                response.status,
+                response.headers,
+                response.body,
+                bytes_body,
+            ));
+        };
+        redirect_count += 1;
+        current_url = redirect.url;
+        current_method = redirect.method;
+        current_body = redirect.body;
+        if !http_method_has_request_body(&current_method) {
+            current_content_type = None;
+        }
+    }
+}
+
+fn http_redirect_headers(headers: &HashMap<String, Value>) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| match value {
+            Value::String(value) => Some((name.clone(), value.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Interpreter {

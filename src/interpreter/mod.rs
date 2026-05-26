@@ -1,6 +1,7 @@
 use crate::error::IcooResult;
 use crate::parser::ast::Program;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::http_config::RuntimeHttpConfig;
 use crate::runtime::logging::RuntimeLogger;
 use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::*;
@@ -16,9 +17,13 @@ mod classes;
 mod coroutines;
 mod eval;
 mod formats;
+mod http_alpn;
 mod http_client;
 mod http_common;
+mod http_proxy;
+mod http_redirect;
 mod http_server;
+mod http_url;
 mod methods;
 mod modules;
 mod tasks;
@@ -46,6 +51,7 @@ pub struct Interpreter {
     current_module_dir: Option<PathBuf>,
     permissions: RuntimePermissions,
     logger: RuntimeLogger,
+    http_config: RuntimeHttpConfig,
     http_tls_roots: Option<Arc<rustls::RootCertStore>>,
     http_tls_config: RefCell<Option<Arc<rustls::ClientConfig>>>,
 }
@@ -95,7 +101,13 @@ impl Interpreter {
     where
         F: FnMut(String) + 'static,
     {
-        Self::with_output_permissions_logger_and_tls_roots(output, permissions, logger, None)
+        Self::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            permissions,
+            logger,
+            None,
+            RuntimeHttpConfig::default(),
+        )
     }
 
     pub fn with_output_permissions_logger_and_tls_roots<F>(
@@ -103,6 +115,25 @@ impl Interpreter {
         permissions: RuntimePermissions,
         logger: RuntimeLogger,
         http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+    ) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        Self::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            permissions,
+            logger,
+            http_tls_roots,
+            RuntimeHttpConfig::default(),
+        )
+    }
+
+    pub fn with_output_permissions_logger_tls_roots_and_http_config<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+        http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+        http_config: RuntimeHttpConfig,
     ) -> Self
     where
         F: FnMut(String) + 'static,
@@ -118,6 +149,7 @@ impl Interpreter {
             current_module_dir: None,
             permissions,
             logger,
+            http_config,
             http_tls_roots,
             http_tls_config: RefCell::new(None),
         };
@@ -131,6 +163,10 @@ impl Interpreter {
 
     pub fn logger(&self) -> &RuntimeLogger {
         &self.logger
+    }
+
+    pub fn http_config(&self) -> &RuntimeHttpConfig {
+        &self.http_config
     }
 
     pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {

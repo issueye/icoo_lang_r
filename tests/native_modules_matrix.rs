@@ -107,6 +107,18 @@ fn native_module_method_specs_cover_registry_and_lookup() {
         "read_text"
     ));
     assert!(icoo_lang_r::native_modules::has_method(
+        "std.io.fs",
+        "mkdir_all"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.io.fs",
+        "metadata"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.io.fs",
+        "write_text_atomic"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
         "std.net.http.client",
         "stream_get"
     ));

@@ -9,6 +9,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
+pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
 use std::path::Path;
@@ -106,6 +107,47 @@ where
         RuntimeLogger::default(),
         Some(std::sync::Arc::new(roots)),
     );
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_output_and_http_config<F>(
+    source: &str,
+    output: F,
+    http_config: RuntimeHttpConfig,
+) -> Result<(), IcooError>
+where
+    F: FnMut(String) + 'static,
+{
+    let program = parse_and_check(source)?;
+    let mut interpreter =
+        interpreter::Interpreter::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            RuntimePermissions::default(),
+            RuntimeLogger::default(),
+            None,
+            http_config,
+        );
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_output_http_config_and_tls_roots<F>(
+    source: &str,
+    output: F,
+    http_config: RuntimeHttpConfig,
+    roots: rustls::RootCertStore,
+) -> Result<(), IcooError>
+where
+    F: FnMut(String) + 'static,
+{
+    let program = parse_and_check(source)?;
+    let mut interpreter =
+        interpreter::Interpreter::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            RuntimePermissions::default(),
+            RuntimeLogger::default(),
+            Some(std::sync::Arc::new(roots)),
+            http_config,
+        );
     interpreter.interpret(&program)
 }
 

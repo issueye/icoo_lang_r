@@ -353,12 +353,52 @@ fs.read_bytes("target/icoo_permissions_matrix/missing.txt")"#,
         ),
         (
             r#"import "std.io.fs" as fs
+fs.read_bytes_range("target/icoo_permissions_matrix/missing.txt", 0, 1)"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.metadata("target/icoo_permissions_matrix/missing.txt")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.symlink_metadata("target/icoo_permissions_matrix/missing.txt")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.canonicalize("target/icoo_permissions_matrix/missing.txt")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.read_link("target/icoo_permissions_matrix/missing.txt")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
 fs.write_text("target/icoo_permissions_matrix/denied.txt", "nope")"#,
             "permission denied: fs.write",
         ),
         (
             r#"import "std.io.fs" as fs
 fs.write_bytes("target/icoo_permissions_matrix/denied.txt", "nope".to_bytes())"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.write_text_atomic("target/icoo_permissions_matrix/denied.txt", "nope")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.write_bytes_atomic("target/icoo_permissions_matrix/denied.txt", "nope".to_bytes())"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.write_bytes_at("target/icoo_permissions_matrix/denied.txt", 0, "nope".to_bytes())"#,
             "permission denied: fs.write",
         ),
         (
@@ -375,6 +415,51 @@ fs.append_bytes("target/icoo_permissions_matrix/denied.txt", "nope".to_bytes())"
             r#"import "std.io.fs" as fs
 fs.list_dir("target/icoo_permissions_matrix")"#,
             "permission denied: fs.list",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.mkdir("target/icoo_permissions_matrix/new")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.mkdir_all("target/icoo_permissions_matrix/new/deep")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.remove_file("target/icoo_permissions_matrix/denied.txt")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.remove_dir("target/icoo_permissions_matrix/denied")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.remove_dir_all("target/icoo_permissions_matrix/denied")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.rename("target/icoo_permissions_matrix/a", "target/icoo_permissions_matrix/b")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.copy("target/icoo_permissions_matrix/a", "target/icoo_permissions_matrix/b")"#,
+            "permission denied: fs.read",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.create_temp_file("target/icoo_permissions_matrix", "tmp")"#,
+            "permission denied: fs.write",
+        ),
+        (
+            r#"import "std.io.fs" as fs
+fs.create_symlink_file("target/icoo_permissions_matrix/a", "target/icoo_permissions_matrix/b")"#,
+            "permission denied: fs.read",
         ),
     ];
 
