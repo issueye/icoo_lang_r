@@ -286,6 +286,41 @@ app.listen_once("127.0.0.1", {})
 }
 
 #[test]
+fn rejects_oversized_web_ino_request_body() {
+    let dir = PathBuf::from("target/icoo_module_tests/web_ino_response_headers_body_limit");
+    fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    let server_path = dir.join("server.icoo");
+    fs::write(
+        &server_path,
+        format!(
+            r#"
+import "std.web.ino" as ino
+
+let app = ino.App()
+
+fn upload(req: Map<String, Any>, res: WebInoResponse):
+    res.send("unexpected")
+
+app.post("/upload", upload)
+app.listen_once("127.0.0.1", {})
+"#,
+            port
+        ),
+    )
+    .unwrap();
+
+    let server_handle = start_server(server_path);
+    let request = b"POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 16777217\r\n\r\n";
+    let _ = raw_request(port, request);
+    let err = server_handle.join().unwrap().unwrap_err();
+    assert!(
+        err.contains("web.ino request body exceeds maximum size: 16777216 bytes"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn rejects_lf_header_injection_in_names_and_values() {
     for (case_name, bad_call, expected) in [
         (

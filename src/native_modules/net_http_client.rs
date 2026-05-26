@@ -90,9 +90,23 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "stream_get_bytes",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "stream_post",
             arity: NativeAritySpec::Range { min: 3, max: 4 },
             params: &["String", "String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_post_bytes",
+            arity: NativeAritySpec::Range { min: 3, max: 4 },
+            params: &["String", "Bytes", "Any", "Function"],
             variadic: None,
             return_type: "Map<String, Any>",
         },
@@ -104,6 +118,13 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "stream_put_bytes",
+            arity: NativeAritySpec::Range { min: 3, max: 4 },
+            params: &["String", "Bytes", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "stream_delete",
             arity: NativeAritySpec::Range { min: 2, max: 3 },
             params: &["String", "Any", "Function"],
@@ -111,7 +132,21 @@ pub const SPEC: NativeModuleSpec = NativeModuleSpec {
             return_type: "Map<String, Any>",
         },
         NativeMethodSpec {
+            name: "stream_delete_bytes",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
             name: "stream_options",
+            arity: NativeAritySpec::Range { min: 2, max: 3 },
+            params: &["String", "Any", "Function"],
+            variadic: None,
+            return_type: "Map<String, Any>",
+        },
+        NativeMethodSpec {
+            name: "stream_options_bytes",
             arity: NativeAritySpec::Range { min: 2, max: 3 },
             params: &["String", "Any", "Function"],
             variadic: None,
@@ -200,12 +235,32 @@ fn dispatch(
             let (headers, handler) = stream_headers_and_handler(&args, 1, span)?;
             runtime.http_client_stream_request("GET", &url, "", &headers, handler, span)
         }
+        "stream_get_bytes" => {
+            expect_arity_range(&args, 2, 3, span)?;
+            let url = expect_string(&args[0], span)?;
+            let (headers, handler) = stream_headers_and_handler(&args, 1, span)?;
+            runtime.http_client_stream_request_bytes("GET", &url, &[], &headers, handler, span)
+        }
         "stream_post" | "stream_put" => {
             expect_arity_range(&args, 3, 4, span)?;
             let url = expect_string(&args[0], span)?;
             let body = expect_string(&args[1], span)?;
             let (headers, handler) = stream_headers_and_handler(&args, 2, span)?;
             runtime.http_client_stream_request(
+                http_stream_method_name(name),
+                &url,
+                &body,
+                &headers,
+                handler,
+                span,
+            )
+        }
+        "stream_post_bytes" | "stream_put_bytes" => {
+            expect_arity_range(&args, 3, 4, span)?;
+            let url = expect_string(&args[0], span)?;
+            let body = expect_bytes(&args[1], span)?;
+            let (headers, handler) = stream_headers_and_handler(&args, 2, span)?;
+            runtime.http_client_stream_request_bytes(
                 http_stream_method_name(name),
                 &url,
                 &body,
@@ -222,6 +277,19 @@ fn dispatch(
                 http_stream_method_name(name),
                 &url,
                 "",
+                &headers,
+                handler,
+                span,
+            )
+        }
+        "stream_delete_bytes" | "stream_options_bytes" => {
+            expect_arity_range(&args, 2, 3, span)?;
+            let url = expect_string(&args[0], span)?;
+            let (headers, handler) = stream_headers_and_handler(&args, 1, span)?;
+            runtime.http_client_stream_request_bytes(
+                http_stream_method_name(name),
+                &url,
+                &[],
                 &headers,
                 handler,
                 span,

@@ -9,7 +9,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
-pub use runtime::permissions::{PermissionRule, RuntimePermissions};
+pub use runtime::permissions::{NetTargetRule, PermissionRule, RuntimePermissions};
 use std::path::Path;
 
 fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {

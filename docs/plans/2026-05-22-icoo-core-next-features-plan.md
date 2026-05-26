@@ -30,7 +30,8 @@
 - 运行时类型检查和值比较 helper 已拆到 `src/interpreter/types.rs`。
 - 参数提取、arity、索引和时间 helper 已拆到 `src/interpreter/args.rs`。
 - JSON/TOML/YAML 值转换 helper 已拆到 `src/interpreter/formats.rs`。
-- `RuntimePermissions` 已接入 `std.io.fs`、`std.env`、`std.os`、`std.net.http.*`、WebIno listen/download 等宿主能力边界。
+- `RuntimePermissions` 已接入 `std.io.fs`、`std.env`、`std.os`、`std.net.http.*`、WebIno listen/download 等宿主能力边界，并支持路径、env key、host/port 白名单。
+- `std.net.ws.client/server`、`std.net.sse.client/server`、`std.net.socket.client/server` 已有单连接 MVP，并复用 net connect/listen 权限。
 - CLI 已支持 `icoo run`、`icoo check`、旧式 `icoo <file.icoo>`、`--help` 和 `--version`。
 - `NativeModuleSpec`/`NativeMethodSpec` 已用于标准库方法元数据和类型检查。
 - 脚本已支持 `try/catch`。
@@ -41,8 +42,8 @@
 当前主要风险：
 
 - `src/interpreter/mod.rs` 已收敛为解释器构造、native 安装和模块接线，后续风险主要转向功能边界而不是单文件膨胀。
-- `Bytes`/`Buffer` 尚未完成设计文档中的全部范围：HTTP/WebIno bytes stream 专用 client API、请求/响应体大小限制仍待推进。
-- 权限模型仍是 coarse-grained allow/deny；还没有路径白名单、host/port 白名单或运行时资源限制。
+- `Bytes`/`Buffer` 尚未完成设计文档中的全部范围：后续主要剩更细的资源策略、配置面和优化。
+- 权限模型已从 coarse-grained allow/deny 扩展到资源白名单；后续主要风险是配置入口、规则通配和嵌入 API 的稳定化。
 - VM 只覆盖同步小子集，不能承载函数、类、模块、native 标准库和 async 主路径。
 - 文档和语言设计总览需要继续同步，避免设计文档落后于代码。
 
@@ -101,8 +102,8 @@ cargo test
 - 已完成：`Bytes.from_base64()`、`Bytes.to_base64()`。
 - 已完成：WebIno `req["body_bytes"]`、上传文件 `content_bytes`。
 - 已完成：`res.send_bytes()`、`res.write_bytes()`。
-- HTTP client bytes streaming。
-- body/chunk 最大体积限制。
+- 已完成：HTTP client bytes streaming。
+- 已完成：body/chunk 最大体积限制。
 
 **Verification:**
 
@@ -114,9 +115,9 @@ cargo test --test web_ino_response_headers
 cargo test
 ```
 
-### P2：权限模型细化
+### P2：权限模型细化（已完成）
 
-**Why:** 当前权限模型已经能阻止大类宿主能力，但还不能表达嵌入场景常见需求，例如“只允许读某个目录”或“只允许访问某个 host”。
+**Why:** 当前权限模型已经能阻止大类宿主能力，并能表达嵌入场景常见需求，例如“只允许读某个目录”或“只允许访问某个 host”。
 
 **Scope:**
 
@@ -154,14 +155,14 @@ cargo test
 1. 拆核心执行/eval 边界。
 2. 拆协程指令编译边界。
 
-第二批（进行中）：
+第二批（已完成）：
 
 3. 补 `Buffer` 和 Base64。
 4. 补 WebIno bytes request/response。
 
 第三批：
 
-5. 权限规则细化。
+5. 权限规则细化（已完成）。
 6. VM 函数调用子集。
 
 ## 5. 暂不做
@@ -175,8 +176,4 @@ cargo test
 
 ## 6. 最小下一步
 
-下一步建议补二进制大小限制和 stream bytes API：
-
-- 给 HTTP/WebIno 请求体和响应体加最大体积限制。
-- 评估 `stream_get_bytes` / `stream_post_bytes` 等 API，让 handler 接收 `Bytes` chunk。
-- 保持默认权限和现有 `Bytes` API 兼容。
+下一步建议推进 VM 函数调用子集，并继续补 CLI 诊断体验。

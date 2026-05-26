@@ -7,6 +7,12 @@ pub(crate) mod json;
 pub(crate) mod math;
 pub(crate) mod net_http_client;
 pub(crate) mod net_http_server;
+pub(crate) mod net_socket_client;
+pub(crate) mod net_socket_server;
+pub(crate) mod net_sse_client;
+pub(crate) mod net_sse_server;
+pub(crate) mod net_ws_client;
+pub(crate) mod net_ws_server;
 pub(crate) mod os;
 pub(crate) mod time;
 pub(crate) mod toml;
@@ -54,6 +60,12 @@ pub const SPECS: &[NativeModuleSpec] = &[
     os::SPEC,
     net_http_client::SPEC,
     net_http_server::SPEC,
+    net_ws_client::SPEC,
+    net_ws_server::SPEC,
+    net_sse_client::SPEC,
+    net_sse_server::SPEC,
+    net_socket_client::SPEC,
+    net_socket_server::SPEC,
     web_ino::SPEC,
 ];
 
@@ -119,6 +131,12 @@ pub(crate) fn call(
         "os" => os::call(runtime, name, args, span),
         "net.http.client" => net_http_client::call(runtime, name, args, span),
         "net.http.server" => net_http_server::call(runtime, name, args, span),
+        "net.ws.client" => net_ws_client::call(runtime, name, args, span),
+        "net.ws.server" => net_ws_server::call(runtime, name, args, span),
+        "net.sse.client" => net_sse_client::call(runtime, name, args, span),
+        "net.sse.server" => net_sse_server::call(runtime, name, args, span),
+        "net.socket.client" => net_socket_client::call(runtime, name, args, span),
+        "net.socket.server" => net_socket_server::call(runtime, name, args, span),
         "web.ino" => web_ino::call(name, args, span),
         _ => None,
     }

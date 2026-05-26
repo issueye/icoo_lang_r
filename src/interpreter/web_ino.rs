@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+const WEB_INO_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug)]
 struct ParsedWebInoRequest {
     method: String,
@@ -305,7 +307,7 @@ impl Interpreter {
                 } else {
                     web_ino_download_filename(&path)
                 };
-                self.permissions().check_fs_read(span)?;
+                self.permissions().check_fs_read_path(&path, span)?;
                 let bytes = std::fs::read(&path).map_err(|err| {
                     IcooError::runtime(
                         format!("web response download() failed: {}", err),
@@ -378,7 +380,8 @@ impl Interpreter {
         port: u16,
         span: Span,
     ) -> IcooResult<()> {
-        self.permissions().check_net_listen(span)?;
+        self.permissions()
+            .check_net_listen_target(host, port, span)?;
         let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
             IcooError::runtime(
                 format!("web.ino listen_once bind failed: {}", err),
@@ -405,7 +408,8 @@ impl Interpreter {
         workers: usize,
         span: Span,
     ) -> IcooResult<()> {
-        self.permissions().check_net_listen(span)?;
+        self.permissions()
+            .check_net_listen_target(host, port, span)?;
         let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
             IcooError::runtime(format!("web.ino listen bind failed: {}", err), Some(span))
         })?;
@@ -592,6 +596,18 @@ fn read_web_ino_request_bytes(stream: &mut std::net::TcpStream) -> Result<Vec<u8
         };
         let head = String::from_utf8_lossy(&bytes[..body_start]);
         let content_length = http_content_length(&head);
+        if content_length.is_some_and(|length| length > WEB_INO_MAX_BODY_BYTES) {
+            return Err(format!(
+                "web.ino request body exceeds maximum size: {} bytes",
+                WEB_INO_MAX_BODY_BYTES
+            ));
+        }
+        if bytes.len().saturating_sub(body_start) > WEB_INO_MAX_BODY_BYTES {
+            return Err(format!(
+                "web.ino request body exceeds maximum size: {} bytes",
+                WEB_INO_MAX_BODY_BYTES
+            ));
+        }
         if content_length
             .map(|length| bytes.len() >= body_start + length)
             .unwrap_or(true)

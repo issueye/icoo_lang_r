@@ -1,4 +1,4 @@
-use icoo_lang_r::{PermissionRule, RuntimePermissions};
+use icoo_lang_r::{NetTargetRule, PermissionRule, RuntimePermissions};
 use std::fs;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -34,6 +34,33 @@ fn send_get_with_retry(port: u16, path: &str) {
         }
     }
     panic!("test server did not accept connections on port {}", port);
+}
+
+fn all_permissions_with(
+    fs_read: PermissionRule,
+    fs_write: PermissionRule,
+    fs_list: PermissionRule,
+    env_read: PermissionRule,
+    net_connect: PermissionRule,
+    net_listen: PermissionRule,
+) -> RuntimePermissions {
+    RuntimePermissions {
+        fs_read,
+        fs_write,
+        fs_list,
+        env_read,
+        os_info: PermissionRule::AllowAll,
+        net_connect,
+        net_listen,
+    }
+}
+
+fn run_with_permissions(source: &str, permissions: RuntimePermissions) -> Result<(), String> {
+    icoo_lang_r::run_source_with_permissions(source, permissions).map_err(|err| err.to_string())
+}
+
+fn path_literal(path: impl AsRef<std::path::Path>) -> String {
+    path.as_ref().to_string_lossy().replace('\\', "/")
 }
 
 #[test]
@@ -224,6 +251,20 @@ server.serve_once("127.0.0.1", 1, "body")"#,
     );
     assert!(server_err.contains("permission denied: net.listen"));
 
+    let socket_client_err = run_denied(
+        r#"import "std.net.socket.client" as socket
+socket.send("127.0.0.1", 1, "body")"#,
+    );
+    assert!(socket_client_err.contains("permission denied: net.connect"));
+
+    let socket_server_err = run_denied(
+        r#"import "std.net.socket.server" as socket
+fn handle(bytes: Bytes):
+    "body"
+socket.serve_once("127.0.0.1", 1, handle)"#,
+    );
+    assert!(socket_server_err.contains("permission denied: net.listen"));
+
     let web_err = run_denied(&format!(
         r#"import "std.web.ino" as ino
 let app = ino.App()
@@ -270,4 +311,160 @@ app.listen_once("127.0.0.1", {})"#,
     send_get_with_retry(port, "/download");
     let err = handle.join().unwrap();
     assert!(err.contains("permission denied: fs.read"));
+}
+
+#[test]
+fn path_allow_list_permits_exact_read_target_and_denies_sibling() {
+    let dir = std::path::PathBuf::from("target/icoo_permissions_matrix/path_read");
+    fs::create_dir_all(&dir).unwrap();
+    let allowed = dir.join("allowed.txt");
+    let denied = dir.join("denied.txt");
+    fs::write(&allowed, "allowed").unwrap();
+    fs::write(&denied, "denied").unwrap();
+
+    let permissions = all_permissions_with(
+        PermissionRule::allow_paths([allowed.clone()]),
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+    );
+    let source = format!(
+        r#"import "std.io.fs" as fs
+fs.read_text("{}")
+fs.read_text("{}")"#,
+        path_literal(&allowed),
+        path_literal(&denied)
+    );
+
+    let err = run_with_permissions(&source, permissions).unwrap_err();
+    assert!(err.contains("permission denied: fs.read"), "{err}");
+    assert!(err.contains("denied.txt"), "{err}");
+}
+
+#[test]
+fn path_allow_list_permits_writes_inside_allowed_directory_only() {
+    let dir = std::path::PathBuf::from("target/icoo_permissions_matrix/path_write");
+    fs::create_dir_all(&dir).unwrap();
+    let allowed = dir.join("inside.txt");
+    let denied = std::path::PathBuf::from("target/icoo_permissions_matrix/outside.txt");
+    let _ = fs::remove_file(&allowed);
+    let _ = fs::remove_file(&denied);
+
+    let permissions = all_permissions_with(
+        PermissionRule::AllowAll,
+        PermissionRule::allow_paths([dir.clone()]),
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+    );
+    let source = format!(
+        r#"import "std.io.fs" as fs
+fs.write_text("{}", "ok")
+fs.write_text("{}", "nope")"#,
+        path_literal(&allowed),
+        path_literal(&denied)
+    );
+
+    let err = run_with_permissions(&source, permissions).unwrap_err();
+    assert_eq!(fs::read_to_string(&allowed).unwrap(), "ok");
+    assert!(!denied.exists());
+    assert!(err.contains("permission denied: fs.write"), "{err}");
+    assert!(err.contains("outside.txt"), "{err}");
+}
+
+#[test]
+fn env_allow_list_permits_named_key_only() {
+    let permissions = all_permissions_with(
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::allow_env_keys(["ICOO_ALLOWED"]),
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+    );
+    let source = r#"import "std.env" as env
+env.has("ICOO_ALLOWED")
+env.has("ICOO_DENIED")"#;
+
+    let err = run_with_permissions(source, permissions).unwrap_err();
+    assert!(err.contains("permission denied: env.read"), "{err}");
+    assert!(err.contains("ICOO_DENIED"), "{err}");
+}
+
+#[test]
+fn net_connect_allow_list_permits_exact_host_port_only() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let allowed_port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0_u8; 512];
+        let _ = std::io::Read::read(&mut stream, &mut buffer);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .unwrap();
+    });
+    let denied_port = free_port();
+    let permissions = all_permissions_with(
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::allow_net_targets([NetTargetRule::host_port("127.0.0.1", allowed_port)]),
+        PermissionRule::AllowAll,
+    );
+    let source = format!(
+        r#"import "std.net.http.client" as client
+client.get("http://127.0.0.1:{}/allowed")
+client.get("http://127.0.0.1:{}/denied")"#,
+        allowed_port, denied_port
+    );
+
+    let err = run_with_permissions(&source, permissions).unwrap_err();
+    server.join().unwrap();
+    assert!(err.contains("permission denied: net.connect"), "{err}");
+    assert!(err.contains(&format!("127.0.0.1:{denied_port}")), "{err}");
+}
+
+#[test]
+fn net_listen_allow_list_permits_exact_host_port_only() {
+    let allowed_port = free_port();
+    let permissions = all_permissions_with(
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::allow_net_targets([NetTargetRule::host_port("127.0.0.1", allowed_port)]),
+    );
+    let allowed_source = format!(
+        r#"import "std.net.http.server" as server
+server.serve_once("127.0.0.1", {}, "ok")"#,
+        allowed_port
+    );
+
+    let handle = thread::spawn(move || run_with_permissions(&allowed_source, permissions));
+    send_get_with_retry(allowed_port, "/allowed");
+    handle.join().unwrap().unwrap();
+
+    let denied_port = free_port();
+    let denied_permissions = all_permissions_with(
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::AllowAll,
+        PermissionRule::allow_net_targets([NetTargetRule::host_port("127.0.0.1", allowed_port)]),
+    );
+    let denied_source = format!(
+        r#"import "std.net.http.server" as server
+server.serve_once("127.0.0.1", {}, "blocked")"#,
+        denied_port
+    );
+
+    let err = run_with_permissions(&denied_source, denied_permissions).unwrap_err();
+    assert!(err.contains("permission denied: net.listen"), "{err}");
+    assert!(err.contains(&format!("127.0.0.1:{denied_port}")), "{err}");
 }

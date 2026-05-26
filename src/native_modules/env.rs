@@ -80,13 +80,13 @@ fn dispatch(
         "get" => {
             expect_arity(&args, 1, span)?;
             let name = expect_string(&args[0], span)?;
-            runtime.permissions().check_env_read(span)?;
+            runtime.permissions().check_env_key(&name, span)?;
             Ok(std::env::var(name).map(Value::String).unwrap_or(Value::Nil))
         }
         "has" => {
             expect_arity(&args, 1, span)?;
             let name = expect_string(&args[0], span)?;
-            runtime.permissions().check_env_read(span)?;
+            runtime.permissions().check_env_key(&name, span)?;
             Ok(Value::Bool(std::env::var_os(name).is_some()))
         }
         _ => unreachable!("native module method should be registered before dispatch"),

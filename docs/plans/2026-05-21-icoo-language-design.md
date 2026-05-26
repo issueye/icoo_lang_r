@@ -1331,7 +1331,7 @@ fs.append_text(path: String, content: String) -> Nil
 fs.list_dir(path: String) -> Array<String>
 ```
 
-`fs.write_text` 会创建或覆盖目标文件，`fs.append_text` 会在文件末尾追加文本并在文件不存在时创建。第一版不做沙箱隔离，调用方应只对可信路径执行文件操作；后续可以增加运行时权限策略或工作目录限制。
+`fs.write_text` 会创建或覆盖目标文件，`fs.append_text` 会在文件末尾追加文本并在文件不存在时创建。运行时权限模型默认保持 allow-all；嵌入方可以为 `fs_read`、`fs_write`、`fs_list` 配置路径白名单，用于只允许访问指定文件或目录树。
 
 `std.os` 模块：
 
@@ -1390,6 +1390,16 @@ http_client.stream_delete(url: String, handler: Function) -> Map<String, Any>
 http_client.stream_delete(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 http_client.stream_options(url: String, handler: Function) -> Map<String, Any>
 http_client.stream_options(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
+http_client.stream_get_bytes(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_get_bytes(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
+http_client.stream_post_bytes(url: String, body: Bytes, handler: Function) -> Map<String, Any>
+http_client.stream_post_bytes(url: String, body: Bytes, headers: Map<String, String>, handler: Function) -> Map<String, Any>
+http_client.stream_put_bytes(url: String, body: Bytes, handler: Function) -> Map<String, Any>
+http_client.stream_put_bytes(url: String, body: Bytes, headers: Map<String, String>, handler: Function) -> Map<String, Any>
+http_client.stream_delete_bytes(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_delete_bytes(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
+http_client.stream_options_bytes(url: String, handler: Function) -> Map<String, Any>
+http_client.stream_options_bytes(url: String, headers: Map<String, String>, handler: Function) -> Map<String, Any>
 ```
 
 返回的 Map 至少包含：
@@ -1400,7 +1410,7 @@ body: String
 headers: Map<String, String>
 ```
 
-`stream_get`、`stream_post`、`stream_put`、`stream_delete`、`stream_options` 用于流式接收响应体。客户端会先读取响应头，然后每收到一个响应片段就调用 handler；如果服务端使用 `Transfer-Encoding: chunked`，则按 HTTP chunk 调用；普通 `Content-Length` 或连接关闭响应按读取片段调用。handler 接收一个 `String` 参数，适合文本流、SSE 风格输出、日志输出等场景。流式接口返回的 Map 包含 `status`、`headers`、`body`、`streamed` 和 `chunks`，其中 `body` 为空字符串，正文由 handler 消费。
+`stream_get`、`stream_post`、`stream_put`、`stream_delete`、`stream_options` 用于流式接收文本响应体。客户端会先读取响应头，然后每收到一个响应片段就调用 handler；如果服务端使用 `Transfer-Encoding: chunked`，则按 HTTP chunk 调用；普通 `Content-Length` 或连接关闭响应按读取片段调用。handler 接收一个 `String` 参数，适合文本流、SSE 风格输出、日志输出等场景。对应的 `*_bytes` 流式接口让 handler 接收 `Bytes`，适合二进制流。流式接口返回的 Map 包含 `status`、`headers`、`body`、`streamed` 和 `chunks`，其中 `body` 为空字符串，正文由 handler 消费。
 
 ```python
 let parts = []
@@ -1411,7 +1421,7 @@ fn on_chunk(chunk: String):
 let response = http_client.stream_get("http://127.0.0.1:8080/events", on_chunk)
 ```
 
-普通请求和流式请求都支持可选 `headers: Map<String, String>` 参数，header name/value 中不能包含 CR/LF，以避免请求头注入。当前 HTTP client 只支持 `http://`，不支持 HTTPS 和重定向。流式接收当前以字符串形式交给 handler，二进制流式 API 后续再扩展。
+普通请求和流式请求都支持可选 `headers: Map<String, String>` 参数，header name/value 中不能包含 CR/LF，以避免请求头注入。当前 HTTP client 只支持 `http://`，不支持 HTTPS 和重定向。HTTP client 普通响应体默认限制为 16 MiB，流式单 chunk 默认限制为 64 KiB。
 
 `std.net.http.server` 模块：
 
@@ -1440,8 +1450,11 @@ res.status(code: Int) -> WebInoResponse
 res.header(name: String, value: String) -> WebInoResponse
 res.content_type(value: String) -> WebInoResponse
 res.send(value: Any) -> Nil
+res.send_bytes(value: Bytes) -> Nil
+res.send_bytes(value: Bytes, content_type: String) -> Nil
 res.json(value: Any) -> Nil
 res.write(value: Any) -> WebInoResponse
+res.write_bytes(value: Bytes) -> WebInoResponse
 res.end() -> Nil
 res.download(path: String) -> Nil
 res.download(path: String, filename: String) -> Nil
@@ -1455,7 +1468,7 @@ fn home(req: Map<String, Any>, res: WebInoResponse):
     res.send("hello " + req.get("path"))
 ```
 
-`req` 是 Map，包含 `method`、`path`、`query`、`query_params`、`params`、`headers`、`body`、`form`、`files`。`query_params` 是已解析的查询参数 Map，支持 `+` 空格和 `%xx` 解码；`params` 是路径参数 Map。普通请求体保留在 `body`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`size`。当前上传内容以字符串形式进入运行时，适合配置、文本、小文件和 MVP 验证；二进制文件落盘、临时文件、上传大小限制和流式读取会在后续版本继续扩展。
+`req` 是 Map，包含 `method`、`path`、`query`、`query_params`、`params`、`headers`、`body`、`body_bytes`、`form`、`files`。`query_params` 是已解析的查询参数 Map，支持 `+` 空格和 `%xx` 解码；`params` 是路径参数 Map。普通请求体以 lossy UTF-8 文本保留在 `body`，原始字节保留在 `body_bytes`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`content_bytes`、`size`。WebIno 请求 body 默认限制为 16 MiB。
 
 ```python
 fn user(req: Map<String, Any>, res: WebInoResponse):
@@ -1472,7 +1485,7 @@ fn upload(req: Map<String, Any>, res: WebInoResponse):
     res.json({"filename": file.get("filename"), "size": file.get("size")})
 ```
 
-`res.header` 设置自定义响应头，`res.content_type` 覆盖 `Content-Type`；header name/value 中不能包含 CR/LF。`res.send` 默认输出 `text/plain; charset=utf-8`，`res.json` 默认输出 `application/json; charset=utf-8`，但不会覆盖显式调用 `res.content_type` 设置的类型。`res.write` 会启动 `Transfer-Encoding: chunked` 的流式响应并立即写出 chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.header`、`res.content_type`、`res.send` 或 `res.json` 修改已经写出的响应头和主体。
+`res.header` 设置自定义响应头，`res.content_type` 覆盖 `Content-Type`；header name/value 中不能包含 CR/LF。`res.send` 默认输出 `text/plain; charset=utf-8`，`res.send_bytes` 默认输出 `application/octet-stream`，`res.json` 默认输出 `application/json; charset=utf-8`，但不会覆盖显式调用 `res.content_type` 设置的类型。`res.write` 会启动 `Transfer-Encoding: chunked` 的文本流式响应，`res.write_bytes` 会原样写入 bytes chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.header`、`res.content_type`、`res.send`、`res.send_bytes` 或 `res.json` 修改已经写出的响应头和主体。
 
 ```python
 fn stream(req: Map<String, Any>, res: WebInoResponse):
@@ -2100,4 +2113,4 @@ ADR：默认使用 Tokio 作为事件循环后端。
 - 模块路径第一版是否完全禁止绝对路径，还是允许 CLI 参数开启？
 - `export let` 导出的可变绑定是导出最终值快照，还是后续需要 live binding？
 - 模块顶层运行时错误是否缓存为 Failed 状态，还是允许下一次 import 重试？
-- 是否需要为 `std.io.fs` 增加权限模型、沙箱根目录和二进制 I/O？
+- 权限模型后续是否需要配置文件、路径通配、域名通配和更稳定的嵌入 API？

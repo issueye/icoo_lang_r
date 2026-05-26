@@ -42,6 +42,12 @@ fn native_module_registry_matches_current_standard_library_surface() {
             "std.os",
             "std.net.http.client",
             "std.net.http.server",
+            "std.net.ws.client",
+            "std.net.ws.server",
+            "std.net.sse.client",
+            "std.net.sse.server",
+            "std.net.socket.client",
+            "std.net.socket.server",
             "std.web.ino",
         ]
     );
@@ -113,6 +119,18 @@ fn native_module_method_specs_cover_registry_and_lookup() {
         "get_bytes"
     ));
     assert!(icoo_lang_r::native_modules::has_method(
+        "std.net.ws.client",
+        "send_text"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.net.sse.server",
+        "serve_once"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.net.socket.client",
+        "send_bytes"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method(
         "std.web.ino",
         "create"
     ));
@@ -135,6 +153,13 @@ fs.read_text(1)
     let err = run(r#"
 import "std.net.http.client" as client
 client.get(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.net.ws.client" as ws
+ws.send_text(1, "hello")
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));
@@ -244,12 +269,27 @@ fn imports_http_modules_and_validates_lightweight_methods() {
     let output = run(r#"
 import "std.net.http.client" as client
 import "std.net.http.server" as server
+import "std.net.ws.client" as ws_client
+import "std.net.ws.server" as ws_server
+import "std.net.sse.client" as sse_client
+import "std.net.sse.server" as sse_server
+import "std.net.socket.client" as socket_client
+import "std.net.socket.server" as socket_server
 
 print(client.to_string().contains("std.net.http.client").to_string())
 print(server.to_string().contains("std.net.http.server").to_string())
+print(ws_client.to_string().contains("std.net.ws.client").to_string())
+print(ws_server.to_string().contains("std.net.ws.server").to_string())
+print(sse_client.to_string().contains("std.net.sse.client").to_string())
+print(sse_server.to_string().contains("std.net.sse.server").to_string())
+print(socket_client.to_string().contains("std.net.socket.client").to_string())
+print(socket_server.to_string().contains("std.net.socket.server").to_string())
 "#)
     .unwrap();
-    assert_eq!(output, vec!["true", "true"]);
+    assert_eq!(
+        output,
+        vec!["true", "true", "true", "true", "true", "true", "true", "true",]
+    );
 
     let err = run(r#"
 import "std.net.http.client" as client
@@ -261,6 +301,15 @@ client.get("https://example.invalid/")
     let err = run(r#"
 import "std.net.http.server" as server
 server.serve_once("127.0.0.1", 0, "body")
+"#)
+    .unwrap_err();
+    assert!(err.contains("server port must be between 1 and 65535"));
+
+    let err = run(r#"
+import "std.net.socket.server" as server
+fn handle(bytes: Bytes):
+    "body"
+server.serve_once("127.0.0.1", 0, handle)
 "#)
     .unwrap_err();
     assert!(err.contains("server port must be between 1 and 65535"));

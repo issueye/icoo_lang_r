@@ -104,25 +104,25 @@ fn dispatch(
         "exists" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_read(span)?;
+            runtime.permissions().check_fs_read_path(&path, span)?;
             Ok(Value::Bool(std::path::Path::new(&path).exists()))
         }
         "is_file" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_read(span)?;
+            runtime.permissions().check_fs_read_path(&path, span)?;
             Ok(Value::Bool(std::path::Path::new(&path).is_file()))
         }
         "is_dir" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_read(span)?;
+            runtime.permissions().check_fs_read_path(&path, span)?;
             Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
         }
         "read_text" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_read(span)?;
+            runtime.permissions().check_fs_read_path(&path, span)?;
             std::fs::read_to_string(&path)
                 .map(Value::String)
                 .map_err(|err| {
@@ -132,7 +132,7 @@ fn dispatch(
         "read_bytes" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_read(span)?;
+            runtime.permissions().check_fs_read_path(&path, span)?;
             std::fs::read(&path)
                 .map(|bytes| Value::Bytes(Rc::new(bytes)))
                 .map_err(|err| {
@@ -143,7 +143,7 @@ fn dispatch(
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_string(&args[1], span)?;
-            runtime.permissions().check_fs_write(span)?;
+            runtime.permissions().check_fs_write_path(&path, span)?;
             std::fs::write(&path, content)
                 .map(|_| Value::Nil)
                 .map_err(|err| {
@@ -154,7 +154,7 @@ fn dispatch(
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_bytes(&args[1], span)?;
-            runtime.permissions().check_fs_write(span)?;
+            runtime.permissions().check_fs_write_path(&path, span)?;
             std::fs::write(&path, content.as_slice())
                 .map(|_| Value::Nil)
                 .map_err(|err| {
@@ -165,7 +165,7 @@ fn dispatch(
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_string(&args[1], span)?;
-            runtime.permissions().check_fs_write(span)?;
+            runtime.permissions().check_fs_write_path(&path, span)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -180,7 +180,7 @@ fn dispatch(
             expect_arity(&args, 2, span)?;
             let path = expect_string(&args[0], span)?;
             let content = expect_bytes(&args[1], span)?;
-            runtime.permissions().check_fs_write(span)?;
+            runtime.permissions().check_fs_write_path(&path, span)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -194,7 +194,7 @@ fn dispatch(
         "list_dir" => {
             expect_arity(&args, 1, span)?;
             let path = expect_string(&args[0], span)?;
-            runtime.permissions().check_fs_list(span)?;
+            runtime.permissions().check_fs_list_path(&path, span)?;
             let mut entries = Vec::new();
             for entry in std::fs::read_dir(&path).map_err(|err| {
                 IcooError::runtime(format!("io.fs.list_dir() failed: {}", err), Some(span))

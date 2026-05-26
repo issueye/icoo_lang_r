@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 impl Interpreter {
-    pub(super) fn call_value(
+    pub(crate) fn call_value(
         &mut self,
         callee: Value,
         args: Vec<Value>,

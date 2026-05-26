@@ -62,6 +62,29 @@ fn start_http_server(response: &'static str) -> (u16, thread::JoinHandle<String>
     spawn_http_server(TcpListener::bind("127.0.0.1:0").unwrap(), response)
 }
 
+fn start_http_server_bytes(response: Vec<u8>) -> (u16, thread::JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 512];
+        loop {
+            let size = stream.read(&mut buffer).unwrap();
+            request.extend_from_slice(&buffer[..size]);
+            if size == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        stream.write_all(&response).unwrap();
+        request
+    });
+    (port, handle)
+}
+
 #[test]
 fn http_client_uses_custom_port_from_url() {
     let (port, server) = start_http_server(
@@ -214,6 +237,36 @@ print(chunks.join(""))
 }
 
 #[test]
+fn http_client_stream_bytes_passes_raw_chunks_to_handler() {
+    let mut response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\n".to_vec();
+    response.extend_from_slice(&[0x00, 0xff, b'A']);
+    response.extend_from_slice(b"\r\n0\r\n\r\n");
+    let (port, server) = start_http_server_bytes(response);
+
+    let output = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+let chunks = []
+
+fn on_chunk(chunk: Bytes):
+    chunks.push(chunk.to_hex())
+
+let response = client.stream_get_bytes("http://127.0.0.1:{}/stream", on_chunk)
+print(response.get("status").to_string())
+print(response.get("chunks").to_string())
+print(chunks.join(""))
+"#,
+        port
+    ))
+    .unwrap();
+    let _request = server.join().unwrap();
+
+    assert_eq!(output, vec!["200", "1", "00ff41"]);
+}
+
+#[test]
 fn http_client_reports_malformed_chunked_response() {
     let (port, server) = start_http_server(
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhi\r\n0\r\n\r\n",
@@ -230,6 +283,55 @@ client.get("http://127.0.0.1:{}/bad-chunk")
     let _request = server.join().unwrap();
 
     assert!(err.contains("invalid chunked response"), "{err}");
+}
+
+#[test]
+fn http_client_rejects_oversized_chunked_response_body() {
+    let (port, server) = start_http_server(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n1000001\r\n",
+    );
+
+    let err = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+client.get("http://127.0.0.1:{}/too-large")
+"#,
+        port
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.contains("http response body exceeds maximum size: 16777216 bytes"),
+        "{err}"
+    );
+    let _ = server.join().unwrap();
+}
+
+#[test]
+fn http_client_stream_rejects_oversized_chunk() {
+    let (port, server) = start_http_server(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n10001\r\n",
+    );
+
+    let err = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+fn on_chunk(chunk: String):
+    print(chunk)
+
+client.stream_get("http://127.0.0.1:{}/too-large-stream", on_chunk)
+"#,
+        port
+    ))
+    .unwrap_err();
+
+    assert!(
+        err.contains("http response stream chunk exceeds maximum size: 65536 bytes"),
+        "{err}"
+    );
+    let _ = server.join().unwrap();
 }
 
 #[test]

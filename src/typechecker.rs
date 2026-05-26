@@ -990,14 +990,42 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
         (
             "NetHttpClient",
-            "get" | "get_bytes" | "post" | "post_bytes" | "put" | "put_bytes" | "delete"
-            | "delete_bytes" | "options" | "options_bytes" | "stream_get" | "stream_post"
-            | "stream_put" | "stream_delete" | "stream_options",
+            "get"
+            | "get_bytes"
+            | "post"
+            | "post_bytes"
+            | "put"
+            | "put_bytes"
+            | "delete"
+            | "delete_bytes"
+            | "options"
+            | "options_bytes"
+            | "stream_get"
+            | "stream_post"
+            | "stream_put"
+            | "stream_delete"
+            | "stream_options"
+            | "stream_get_bytes"
+            | "stream_post_bytes"
+            | "stream_put_bytes"
+            | "stream_delete_bytes"
+            | "stream_options_bytes",
         ) => Some(TypeInfo::map(
             TypeInfo::known("String"),
             TypeInfo::known("Any"),
         )),
         ("NetHttpServer", "serve_once") => Some(TypeInfo::known("Nil")),
+        ("NetWsClient", "send_text") => Some(TypeInfo::known("String")),
+        ("NetWsClient", "send_bytes") => Some(TypeInfo::known("Bytes")),
+        ("NetWsServer", "serve_once") => Some(TypeInfo::known("Nil")),
+        ("NetSseClient", "get") => Some(TypeInfo::map(
+            TypeInfo::known("String"),
+            TypeInfo::known("Any"),
+        )),
+        ("NetSseServer", "serve_once") => Some(TypeInfo::known("Nil")),
+        ("NetSocketClient", "send") => Some(TypeInfo::known("String")),
+        ("NetSocketClient", "send_bytes") => Some(TypeInfo::known("Bytes")),
+        ("NetSocketServer", "serve_once") => Some(TypeInfo::known("Nil")),
         ("WebIno", "App" | "create") => Some(TypeInfo::known("WebInoApp")),
         ("WebInoApp", "get" | "post" | "put" | "delete" | "options") => {
             Some(TypeInfo::known("WebInoApp"))
@@ -1260,7 +1288,15 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        ("NetHttpClient", "stream_get" | "stream_delete" | "stream_options") => Some(native_sig(
+        (
+            "NetHttpClient",
+            "stream_get"
+            | "stream_get_bytes"
+            | "stream_delete"
+            | "stream_delete_bytes"
+            | "stream_options"
+            | "stream_options_bytes",
+        ) => Some(native_sig(
             NativeArity::Range { min: 2, max: 3 },
             vec![Some("String"), Some("Any"), Some("Function")],
             None,
@@ -1331,6 +1367,12 @@ fn native_method_sig(
         ("WebInoResponse", "send" | "json" | "write") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Any")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_post_bytes" | "stream_put_bytes") => Some(native_sig(
+            NativeArity::Range { min: 3, max: 4 },
+            vec![Some("String"), Some("Bytes"), Some("Any"), Some("Function")],
             None,
             return_type,
         )),
