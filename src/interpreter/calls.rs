@@ -32,15 +32,37 @@ impl Interpreter {
         }
     }
 
+    pub fn call_global_main(&mut self) -> IcooResult<()> {
+        let span = Span::new(1, 1, 0, 0);
+        let main =
+            self.env.borrow().get("main", span).map_err(|_| {
+                IcooError::runtime("project entry must define fn main()", Some(span))
+            })?;
+        self.call_value(main, Vec::new(), span).map(|_| ())
+    }
+
     pub(super) fn call_function(
         &mut self,
         function: Rc<IcooFunction>,
         args: Vec<Value>,
         span: Span,
     ) -> IcooResult<Value> {
+        self.check_timeout(span)?;
+        if self.call_depth >= crate::runtime::limits::MAX_CALL_DEPTH {
+            return Err(IcooError::runtime(
+                format!(
+                    "maximum call stack depth exceeded ({})",
+                    crate::runtime::limits::MAX_CALL_DEPTH
+                ),
+                Some(span),
+            ));
+        }
+        self.call_depth += 1;
+
         let bound_offset = usize::from(function.bound_self.is_some());
         let expected = function.decl.params.len().saturating_sub(bound_offset);
         if args.len() != expected {
+            self.call_depth -= 1;
             return Err(IcooError::runtime(
                 format!("expected {} arguments but got {}", expected, args.len()),
                 Some(span),
@@ -53,12 +75,15 @@ impl Interpreter {
             if param_index == 0 {
                 if let Some(receiver) = &function.bound_self {
                     if let Some(type_hint) = &param.type_hint {
-                        check_value_type(
+                        if let Err(err) = check_value_type(
                             receiver,
                             type_hint,
                             &format!("parameter '{}'", param.name.name),
                             span,
-                        )?;
+                        ) {
+                            self.call_depth -= 1;
+                            return Err(err);
+                        }
                     }
                     env.borrow_mut().define(
                         param.name.name.clone(),
@@ -71,12 +96,15 @@ impl Interpreter {
             }
             let arg = args[arg_index].clone();
             if let Some(type_hint) = &param.type_hint {
-                check_value_type(
+                if let Err(err) = check_value_type(
                     &arg,
                     type_hint,
                     &format!("parameter '{}'", param.name.name),
                     span,
-                )?;
+                ) {
+                    self.call_depth -= 1;
+                    return Err(err);
+                }
             }
             env.borrow_mut()
                 .define(param.name.name.clone(), arg, true, BindingKind::Mutable);
@@ -84,6 +112,7 @@ impl Interpreter {
         }
 
         if function.decl.is_coroutine {
+            self.call_depth -= 1;
             return Ok(Value::Coroutine(Rc::new(RefCell::new(IcooCoroutine {
                 name: function.decl.name.name.clone(),
                 return_type: function.decl.return_type.clone(),
@@ -95,7 +124,7 @@ impl Interpreter {
         }
 
         let result = self.execute_block(&function.decl.body, env);
-        match result {
+        let result = match result {
             Err(IcooError::Return(value)) => {
                 if function.is_initializer {
                     Ok(function.bound_self.clone().unwrap_or(Value::Nil))
@@ -104,7 +133,14 @@ impl Interpreter {
                     Ok(value)
                 }
             }
-            Err(err) => Err(err),
+            Err(mut err) => {
+                err.push_frame(
+                    function.decl.name.name.clone(),
+                    function.decl.name.span,
+                    crate::error::StackFrameKind::Function,
+                );
+                Err(err)
+            }
             Ok(()) if function.is_initializer => {
                 Ok(function.bound_self.clone().unwrap_or(Value::Nil))
             }
@@ -112,7 +148,9 @@ impl Interpreter {
                 self.check_function_return(&function, &Value::Nil, span)?;
                 Ok(Value::Nil)
             }
-        }
+        };
+        self.call_depth -= 1;
+        result
     }
 
     fn check_function_return(
@@ -153,6 +191,23 @@ impl Interpreter {
                 Some(span),
             ));
         }
+        let name = function.name.clone();
+        let result = self.dispatch_native_function(&function, args, span);
+        match result {
+            Err(mut err) if !matches!(err, IcooError::Return(_)) => {
+                err.push_frame(name, span, crate::error::StackFrameKind::NativeFunction);
+                Err(err)
+            }
+            other => other,
+        }
+    }
+
+    fn dispatch_native_function(
+        &mut self,
+        function: &NativeFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
         match function.name.as_str() {
             "print" => {
                 (self.output)(args[0].display());

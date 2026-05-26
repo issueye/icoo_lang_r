@@ -132,6 +132,7 @@ impl Interpreter {
             if loop_ref.borrow().stopped {
                 break;
             }
+            self.check_timeout(span)?;
             enqueue_due_timers(&loop_ref);
             let Some(task) = loop_ref.borrow_mut().ready.pop_front() else {
                 if wait_for_next_timer(&loop_ref) {
@@ -155,6 +156,7 @@ impl Interpreter {
             if loop_ref.borrow().stopped || is_task_terminal(&target) {
                 break;
             }
+            self.check_timeout(span)?;
             enqueue_due_timers(&loop_ref);
             if is_task_terminal(&target) {
                 break;

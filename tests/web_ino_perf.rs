@@ -52,9 +52,10 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn ping(req: Map<String, Any>, res: WebInoResponse):
+fn ping(req: Map<String, Any>, res: WebInoResponse) {{
     res.send("ok:" + req.get("path"))
 
+}}
 app.get("/ping", ping)
 app.get("/route-0", ping)
 app.get("/route-1", ping)

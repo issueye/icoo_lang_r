@@ -4,14 +4,14 @@
 
 ## 1. 目标
 
-Icoo 是一个使用 Rust 实现的小型脚本语言。语法风格接近 Python，但对象模型更严格：类属性必须显式声明，继承使用 `class Child <- Parent:` 语法。
+Icoo 是一个使用 Rust 实现的小型脚本语言。当前语法使用大括号表达代码块，对象模型更严格：类属性必须显式声明，继承使用 `class Child <- Parent { ... }` 语法。
 
 第一版推荐实现为 AST 解释器。这样在语言语法和运行时语义还未完全稳定时，修改成本更低，也更容易调试。等核心行为稳定后，再考虑增加字节码虚拟机。
 
 主要目标：
 
-- 简单的 Python 风格语法。
-- 使用缩进表示代码块。
+- 简单的大括号块语法。
+- 使用 `{ ... }` 表示代码块。
 - 支持变量和常量。
 - 支持 `final` 一次赋值绑定。
 - 支持函数和方法。
@@ -42,30 +42,37 @@ let count = 10
 final runtime_id: String
 runtime_id = "icoo-" + count.to_string()
 
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
-class Animal:
+}
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print("...")
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print(self.name + " says woof")
 
+    }
+}
 let dog = Dog("Lucky", "Border Collie", "U001")
 dog.speak()
 
@@ -198,11 +205,13 @@ const 1_COUNT = 1         # 错误：不能以数字开头
 类名命名：
 
 ```python
-class User:
+class User {
     let name: String
 
-class HttpClient:
+}
+class HttpClient {
     let base_url: String
+}
 ```
 
 规则：
@@ -214,11 +223,13 @@ class HttpClient:
 方法命名：
 
 ```python
-class User:
+class User {
     let name: String
 
-    fn get_name(self) -> String:
+    fn get_name(self) -> String {
         return self.name
+    }
+}
 ```
 
 规则：
@@ -233,12 +244,13 @@ class User:
 非法示例：
 
 ```python
-class User:
+class User {
     fn getName(self):      # 错误：驼峰命名
         return self.name
 
     fn GetName(self):      # 错误：首字母大写
         return self.name
+}
 ```
 
 普通变量和类属性第一版不强制命名风格，但推荐使用 snake_case。
@@ -387,12 +399,14 @@ Instance
 用户类实例默认继承 `to_string()` 和 `type_name()` 行为：
 
 ```python
-class User:
+class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
+    }
+}
 let user = User("Tom")
 print(user.to_string())   # 默认类似 "<User instance>"
 print(user.type_name())   # "User"
@@ -401,14 +415,17 @@ print(user.type_name())   # "User"
 用户可以在类中定义同名方法覆盖默认行为：
 
 ```python
-class User:
+class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "User(" + self.name + ")"
+    }
+}
 ```
 
 内置方法规则：
@@ -424,7 +441,7 @@ class User:
 
 ## 6. 词法结构
 
-Icoo 使用缩进定义代码块。
+Icoo 使用大括号定义代码块。
 
 主要 Token：
 
@@ -610,12 +627,13 @@ RuntimeBackend trait
 推荐语法：
 
 ```python
-async fn worker(name: String):
+async fn worker(name: String) {
     print(f"{name}: start")
     await sleep(0)
     print(f"{name}: end")
     return name
 
+}
 let loop = EventLoop()
 let a = loop.spawn(worker("A"))
 let b = loop.spawn(worker("B"))
@@ -629,19 +647,22 @@ print(b.result())      # "B"
 等待任务：
 
 ```python
-async fn counter(limit: Int) -> Int:
+async fn counter(limit: Int) -> Int {
     let i = 0
-    while i < limit:
+    while i < limit {
         await sleep(0)
         i = i + 1
+    }
     return i
 
-async fn main():
+}
+async fn main() {
     let loop = current_loop()
     let task = loop.spawn(counter(3))
     let value = await task
     print(value.to_string())
 
+}
 let loop = EventLoop()
 loop.spawn(main())
 loop.run()
@@ -667,19 +688,22 @@ loop.run()
 类方法示例：
 
 ```python
-class Job:
+class Job {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    async fn run(self):
+    }
+    async fn run(self) {
         await sleep(0)
         print(self.name + ":start")
         await sleep(0)
         print(self.name + ":end")
         return "done"
 
+    }
+}
 let loop = EventLoop()
 let task = loop.spawn(Job("build").run())
 loop.run_until(task)
@@ -688,16 +712,18 @@ loop.run_until(task)
 事件循环中的任务关系：
 
 ```python
-async fn fetch_user(id: Int) -> String:
+async fn fetch_user(id: Int) -> String {
     await sleep(0)
     return f"user:{id}"
 
-async fn handle_request():
+}
+async fn handle_request() {
     let loop = current_loop()
     let user_task = loop.spawn(fetch_user(7))
     let user = await user_task
     print(user)
 
+}
 let loop = EventLoop()
 loop.spawn(handle_request())
 loop.run()
@@ -735,11 +761,12 @@ Cancelled   已取消
 - 第一版没有真实异步 I/O 时，等待源主要是 `Task` 依赖和 `sleep(ms)` 定时器。
 
 ```python
-async fn ticker(name: String):
+async fn ticker(name: String) {
     print(name + ":1")
     await sleep(0)
     print(name + ":2")
 
+}
 let loop = EventLoop()
 loop.spawn(ticker("A"))
 loop.spawn(ticker("B"))
@@ -768,15 +795,17 @@ loop.run()
 类实例属性必须在类体中显式声明。
 
 ```python
-class User:
+class User {
     let name: String
     let age: Int = 0
     const ROLE: String = "user"
     final user_id: String
 
-    fn init(self, name: String, user_id: String):
+    fn init(self, name: String, user_id: String) {
         self.name = name
         self.user_id = user_id
+    }
+}
 ```
 
 属性规则：
@@ -793,12 +822,14 @@ class User:
 非法示例：
 
 ```python
-class User:
+class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
         self.email = "x@test.com"  # 错误：email 未声明
+    }
+}
 ```
 
 实例构造流程：
@@ -815,8 +846,9 @@ class User:
 Icoo 支持单继承。
 
 ```python
-class Dog <- Animal:
+class Dog <- Animal {
     let breed: String
+}
 ```
 
 规则：
@@ -1415,9 +1447,10 @@ headers: Map<String, String>
 ```python
 let parts = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {
     parts.push(chunk)
 
+}
 let response = http_client.stream_get("http://127.0.0.1:8080/events", on_chunk)
 ```
 
@@ -1463,43 +1496,48 @@ res.download(path: String, filename: String) -> Nil
 `std.web.ino` 是类 Node Express 风格的 HTTP 服务框架封装。路由优先精确路径匹配；当没有精确命中时，支持 `:name` 路径参数，例如 `/users/:id`。handler 接收两个参数：
 
 ```python
-fn home(req: Map<String, Any>, res: WebInoResponse):
+fn home(req: Map<String, Any>, res: WebInoResponse) {
     res.status(200)
     res.send("hello " + req.get("path"))
+}
 ```
 
 `req` 是 Map，包含 `method`、`path`、`query`、`query_params`、`params`、`headers`、`body`、`body_bytes`、`form`、`files`。`query_params` 是已解析的查询参数 Map，支持 `+` 空格和 `%xx` 解码；`params` 是路径参数 Map。普通请求体以 lossy UTF-8 文本保留在 `body`，原始字节保留在 `body_bytes`；当请求是 `multipart/form-data` 时，普通表单字段写入 `form`，文件字段写入 `files`。文件对象包含 `field`、`filename`、`content_type`、`content`、`content_bytes`、`size`。WebIno 请求 body 默认限制为 16 MiB。
 
 ```python
-fn user(req: Map<String, Any>, res: WebInoResponse):
+fn user(req: Map<String, Any>, res: WebInoResponse) {
     let params = req.get("params")
     let query = req.get("query_params")
     res.send(params.get("id") + ":" + query.get("name"))
 
+}
 app.get("/users/:id", user)
 ```
 
 ```python
-fn upload(req: Map<String, Any>, res: WebInoResponse):
+fn upload(req: Map<String, Any>, res: WebInoResponse) {
     let file = req.get("files").get("avatar")
     res.json({"filename": file.get("filename"), "size": file.get("size")})
+}
 ```
 
 `res.header` 设置自定义响应头，`res.content_type` 覆盖 `Content-Type`；header name/value 中不能包含 CR/LF。`res.send` 默认输出 `text/plain; charset=utf-8`，`res.send_bytes` 默认输出 `application/octet-stream`，`res.json` 默认输出 `application/json; charset=utf-8`，但不会覆盖显式调用 `res.content_type` 设置的类型。`res.write` 会启动 `Transfer-Encoding: chunked` 的文本流式响应，`res.write_bytes` 会原样写入 bytes chunk，`res.end` 结束流。流式响应开始后不能再调用 `res.status`、`res.header`、`res.content_type`、`res.send`、`res.send_bytes` 或 `res.json` 修改已经写出的响应头和主体。
 
 ```python
-fn stream(req: Map<String, Any>, res: WebInoResponse):
+fn stream(req: Map<String, Any>, res: WebInoResponse) {
     res.write("hello")
     res.write(" ")
     res.write(req.get("path"))
     res.end()
+}
 ```
 
 `res.download` 用于文件下载，会读取本地文件并设置 `Content-Disposition: attachment`、`Content-Length` 和基础 `Content-Type`。第二个参数可指定浏览器下载时使用的文件名；省略时使用路径中的文件名。下载响应支持字节内容，适合返回图片、压缩包、PDF 等文件。
 
 ```python
-fn export_file(req: Map<String, Any>, res: WebInoResponse):
+fn export_file(req: Map<String, Any>, res: WebInoResponse) {
     res.download("storage/report.pdf", "report.pdf")
+}
 ```
 
 `listen_once` 是阻塞调用，只接收一个请求，用于当前 MVP 测试和验证。
@@ -1592,14 +1630,17 @@ task.cancel()
 ```python
 export const VERSION: String = "1.0.0"
 
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
-export class User:
+}
+export class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
+    }
+}
 ```
 
 命名空间导入：
@@ -1773,10 +1814,11 @@ enum TypeInfo {
 
 ```python
 # math_extra.icoo
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
 # main.icoo
+}
 import "./math_extra.icoo" as math_extra
 let value: String = math_extra.add(1, 2)
 ```
@@ -1920,7 +1962,7 @@ ADR：第一版模块系统使用显式导出和静态本地导入。
 - `async` 和 `await` 关键字。
 - `co` 和 `yield` 作为兼容/底层关键字保留。
 - 数字和字符串。
-- 缩进处理。
+- 块边界处理。
 - `INDENT` 和 `DEDENT`。
 - `<-` 继承 token。
 

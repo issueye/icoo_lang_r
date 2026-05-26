@@ -1,13 +1,17 @@
 export const VERSION: String = "modules-1"
 
-export fn add(a: Int, b: Int) -> Int:
+export fn add(a: Int, b: Int) -> Int {
     return a + b
 
-export class User:
+}
+export class User {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "User(" + self.name + ")"
+    }
+}

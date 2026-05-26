@@ -175,13 +175,13 @@ fn dispatch(
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
             let headers = optional_headers(&args, 1, span)?;
-            http_client_request(runtime.permissions(), "GET", &url, "", &headers, span)
+            http_client_request(runtime, "GET", &url, "", &headers, span)
         }
         "get_bytes" => {
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
             let headers = optional_headers(&args, 1, span)?;
-            http_client_request_bytes(runtime.permissions(), "GET", &url, &[], &headers, span)
+            http_client_request_bytes(runtime, "GET", &url, &[], &headers, span)
         }
         "post" | "put" => {
             expect_arity_range(&args, 2, 3, span)?;
@@ -189,7 +189,7 @@ fn dispatch(
             let body = expect_string(&args[1], span)?;
             let headers = optional_headers(&args, 2, span)?;
             http_client_request(
-                runtime.permissions(),
+                runtime,
                 &name.to_ascii_uppercase(),
                 &url,
                 &body,
@@ -203,14 +203,14 @@ fn dispatch(
             let body = expect_bytes(&args[1], span)?;
             let headers = optional_headers(&args, 2, span)?;
             let method = if name == "post_bytes" { "POST" } else { "PUT" };
-            http_client_request_bytes(runtime.permissions(), method, &url, &body, &headers, span)
+            http_client_request_bytes(runtime, method, &url, &body, &headers, span)
         }
         "delete" | "options" => {
             expect_arity_range(&args, 1, 2, span)?;
             let url = expect_string(&args[0], span)?;
             let headers = optional_headers(&args, 1, span)?;
             http_client_request(
-                runtime.permissions(),
+                runtime,
                 &name.to_ascii_uppercase(),
                 &url,
                 "",
@@ -227,7 +227,7 @@ fn dispatch(
             } else {
                 "OPTIONS"
             };
-            http_client_request_bytes(runtime.permissions(), method, &url, &[], &headers, span)
+            http_client_request_bytes(runtime, method, &url, &[], &headers, span)
         }
         "stream_get" => {
             expect_arity_range(&args, 2, 3, span)?;

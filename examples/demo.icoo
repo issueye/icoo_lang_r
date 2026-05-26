@@ -4,34 +4,42 @@ let count = 10
 final runtime_id: String
 runtime_id = "icoo-" + count.to_string()
 
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
-class Animal:
+}
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print("...")
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
     const KIND: String = "dog"
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn speak(self):
+    }
+    fn speak(self) {
         print(self.name + " says woof")
 
-    fn to_string(self) -> String:
+    }
+    fn to_string(self) -> String {
         return "Dog(" + self.name + ", " + self.breed + ")"
 
+    }
+}
 let dog = Dog("Lucky", "Border Collie", "U001")
 dog.speak()
 print(dog.to_string())

@@ -137,8 +137,7 @@ fn http_client_sends_custom_headers_on_regular_requests() {
     let (port, server) =
         start_http_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
 
-    let output = run(&format!(
-        r#"
+    let output = run(&format!(r#"
 import "std.net.http.client" as client
 
 let response = client.get("http://127.0.0.1:{}/headers", {{"X-Trace-Id": "abc123", "X-Mode": "regular"}})
@@ -181,6 +180,34 @@ print(response.get("body"))
 }
 
 #[test]
+fn http_client_body_request_uses_custom_content_type_once() {
+    let (port, server) =
+        start_http_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+
+    let output = run(&format!(
+        r#"
+import "std.net.http.client" as client
+
+let response = client.post("http://127.0.0.1:{}/json", "{{\"ok\":true}}", {{"Content-Type": "application/json", "X-Trace-Id": "json123"}})
+print(response.get("status").to_string())
+print(response.get("body"))
+"#,
+        port
+    ))
+    .unwrap();
+    let request = server.join().unwrap();
+
+    assert_eq!(output, vec!["200", "ok"]);
+    assert_eq!(request.matches("Content-Type:").count(), 1, "{request}");
+    assert!(
+        request.contains("Content-Type: application/json"),
+        "{request}"
+    );
+    assert!(!request.contains("text/plain"), "{request}");
+    assert!(request.contains("X-Trace-Id: json123"), "{request}");
+}
+
+#[test]
 fn http_client_sends_custom_headers_on_streaming_requests() {
     let (port, server) = start_http_server(
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
@@ -192,9 +219,10 @@ import "std.net.http.client" as client
 
 let chunks = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {{
     chunks.push(chunk)
 
+}}
 let response = client.stream_get("http://127.0.0.1:{}/stream", {{"X-Mode": "stream"}}, on_chunk)
 print(response.get("status").to_string())
 print(response.get("chunks").to_string())
@@ -221,9 +249,10 @@ import "std.net.http.client" as client
 
 let chunks = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {{
     chunks.push(chunk)
 
+}}
 let response = client.stream_get("http://127.0.0.1:{}/stream", on_chunk)
 print(response.get("status").to_string())
 print(chunks.join(""))
@@ -346,9 +375,10 @@ import "std.net.http.client" as client
 
 let chunks = []
 
-fn on_chunk(chunk: String):
+fn on_chunk(chunk: String) {{
     chunks.push(chunk)
 
+}}
 let response = client.stream_get("http://127.0.0.1:{}/length", on_chunk)
 print(response.get("status").to_string())
 print(response.get("headers").get("content-length"))

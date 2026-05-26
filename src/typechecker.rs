@@ -988,6 +988,14 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "exe_path" | "get_env") => Some(TypeInfo::Unknown),
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
+        ("Path", "join" | "normalize" | "dirname" | "basename" | "extension") => {
+            Some(TypeInfo::known("String"))
+        }
+        ("Path", "is_absolute") => Some(TypeInfo::known("Bool")),
+        ("Process", "exec") => Some(TypeInfo::map(
+            TypeInfo::known("String"),
+            TypeInfo::known("Any"),
+        )),
         (
             "NetHttpClient",
             "get"
@@ -1070,6 +1078,7 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Buffer", "slice" | "to_bytes") => Some(TypeInfo::known("Bytes")),
         ("Buffer", "clear") => Some(TypeInfo::known("Nil")),
         ("Buffer", "to_hex" | "to_base64") => Some(TypeInfo::known("String")),
+        ("Log", "debug" | "info" | "warn" | "error") => Some(TypeInfo::known("Nil")),
         _ => None,
     }
 }
@@ -1288,15 +1297,19 @@ fn native_method_sig(
             None,
             return_type,
         )),
-        (
-            "NetHttpClient",
-            "stream_get"
-            | "stream_get_bytes"
-            | "stream_delete"
-            | "stream_delete_bytes"
-            | "stream_options"
-            | "stream_options_bytes",
-        ) => Some(native_sig(
+        ("NetHttpClient", "stream_get" | "stream_delete" | "stream_options") => Some(native_sig(
+            NativeArity::Range { min: 2, max: 3 },
+            vec![Some("String"), Some("Any"), Some("Function")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_get_bytes") => Some(native_sig(
+            NativeArity::Range { min: 2, max: 3 },
+            vec![Some("String"), Some("Any"), Some("Function")],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_delete_bytes" | "stream_options_bytes") => Some(native_sig(
             NativeArity::Range { min: 2, max: 3 },
             vec![Some("String"), Some("Any"), Some("Function")],
             None,
@@ -1310,6 +1323,12 @@ fn native_method_sig(
                 Some("Any"),
                 Some("Function"),
             ],
+            None,
+            return_type,
+        )),
+        ("NetHttpClient", "stream_post_bytes" | "stream_put_bytes") => Some(native_sig(
+            NativeArity::Range { min: 3, max: 4 },
+            vec![Some("String"), Some("Bytes"), Some("Any"), Some("Function")],
             None,
             return_type,
         )),
@@ -1367,12 +1386,6 @@ fn native_method_sig(
         ("WebInoResponse", "send" | "json" | "write") => Some(native_sig(
             NativeArity::Exact(1),
             vec![Some("Any")],
-            None,
-            return_type,
-        )),
-        ("NetHttpClient", "stream_post_bytes" | "stream_put_bytes") => Some(native_sig(
-            NativeArity::Range { min: 3, max: 4 },
-            vec![Some("String"), Some("Bytes"), Some("Any"), Some("Function")],
             None,
             return_type,
         )),

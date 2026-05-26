@@ -14,12 +14,14 @@ fn run(source: &str) -> Result<Vec<String>, String> {
 #[test]
 fn catches_runtime_errors_and_binds_string_error() {
     let output = run(r#"
-try:
+try {
     int("not-an-int")
-catch err:
+}
+catch err {
     print(err.type_name())
     print(err.to_string().contains("runtime error").to_string())
     print(err.to_string().contains("cannot convert 'not-an-int' to Int").to_string())
+}
 "#)
     .unwrap();
 
@@ -29,13 +31,16 @@ catch err:
 #[test]
 fn does_not_catch_return_signal() {
     let output = run(r#"
-fn exits() -> String:
-    try:
+fn exits() -> String {
+    try {
         return "returned"
-    catch err:
+    }
+    catch err {
         return "caught"
+    }
     return "after"
 
+}
 print(exits())
 "#)
     .unwrap();
@@ -47,13 +52,16 @@ print(exits())
 fn does_not_catch_break_signal() {
     let output = run(r#"
 let count = 0
-while count < 1:
-    try:
+while count < 1 {
+    try {
         break
-    catch err:
+    }
+    catch err {
         print("caught")
         count = 1
 
+    }
+}
 print("after")
 "#)
     .unwrap();
@@ -64,11 +72,13 @@ print("after")
 #[test]
 fn catch_binding_does_not_escape_scope() {
     let err = run(r#"
-try:
+try {
     int("bad")
-catch err:
+}
+catch err {
     print(err.to_string().contains("cannot convert").to_string())
 
+}
 print(err)
 "#)
     .unwrap_err();
@@ -79,11 +89,13 @@ print(err)
 #[test]
 fn skips_catch_when_try_block_succeeds() {
     let output = run(r#"
-try:
+try {
     print("try")
-catch err:
+}
+catch err {
     print("catch")
 
+}
 print("after")
 "#)
     .unwrap();

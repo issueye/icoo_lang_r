@@ -14,15 +14,17 @@ fn run(source: &str) -> Result<Vec<String>, String> {
 #[test]
 fn run_until_only_waits_for_target_task() {
     let output = run(r#"
-async fn fast() -> String:
+async fn fast() -> String {
     return "done"
 
-async fn slow() -> String:
+}
+async fn slow() -> String {
     let delay = sleep(50)
     await delay
     print("slow")
     return "slow"
 
+}
 let loop = EventLoop(2)
 let fast_task = loop.spawn(fast())
 let slow_task = loop.spawn(slow())
@@ -37,21 +39,24 @@ print(slow_task.is_done().to_string())
 #[test]
 fn cancelling_task_wakes_awaiters_with_stable_error() {
     let err = run(r#"
-async fn child() -> String:
+async fn child() -> String {
     let delay = sleep(50)
     await delay
     return "child"
 
+}
 let loop = EventLoop(2)
 let child_task = loop.spawn(child())
 
-async fn waiter() -> String:
+async fn waiter() -> String {
     let value = await child_task
     return value
 
-async fn canceller() -> Nil:
+}
+async fn canceller() -> Nil {
     child_task.cancel()
 
+}
 let waiter_task = loop.spawn(waiter())
 loop.spawn(canceller())
 loop.run_until(waiter_task)
@@ -64,9 +69,10 @@ loop.run_until(waiter_task)
 #[test]
 fn run_until_rejects_task_from_another_event_loop() {
     let err = run(r#"
-async fn done() -> String:
+async fn done() -> String {
     return "done"
 
+}
 let first = EventLoop(2)
 let second = EventLoop(2)
 let task = second.spawn(done())
@@ -83,9 +89,10 @@ first.run_until(task)
 #[test]
 fn spawn_rejects_reusing_the_same_coroutine() {
     let err = run(r#"
-async fn done() -> String:
+async fn done() -> String {
     return "done"
 
+}
 let loop = EventLoop(2)
 let coroutine = done()
 loop.spawn(coroutine)
@@ -99,14 +106,16 @@ loop.spawn(coroutine)
 #[test]
 fn resolver_rejects_await_inside_complex_expressions() {
     let err = run(r#"
-async fn value() -> String:
+async fn value() -> String {
     return "value"
 
-async fn main() -> String:
+}
+async fn main() -> String {
     let loop = current_loop()
     let task = loop.spawn(value())
     return "got:" + await task
 
+}
 let loop = EventLoop(2)
 loop.run_until(loop.spawn(main()))
 "#)

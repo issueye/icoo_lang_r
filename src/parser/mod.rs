@@ -180,10 +180,7 @@ impl Parser {
         }
         if self.matches(&TokenKind::Return) {
             let span = self.previous().span;
-            let value = if self.check(&TokenKind::Newline)
-                || self.check(&TokenKind::Dedent)
-                || self.check(&TokenKind::Eof)
-            {
+            let value = if self.is_statement_boundary() {
                 None
             } else {
                 Some(self.expression()?)
@@ -193,10 +190,7 @@ impl Parser {
         }
         if self.matches(&TokenKind::Yield) {
             let span = self.previous().span;
-            let value = if self.check(&TokenKind::Newline)
-                || self.check(&TokenKind::Dedent)
-                || self.check(&TokenKind::Eof)
-            {
+            let value = if self.is_statement_boundary() {
                 None
             } else {
                 Some(self.expression()?)
@@ -224,10 +218,12 @@ impl Parser {
         let then_branch = self.block()?;
         let mut elifs = Vec::new();
         let mut else_branch = None;
+        self.skip_newlines();
         while self.matches(&TokenKind::Elif) {
             let cond = self.expression()?;
             let body = self.block()?;
             elifs.push((cond, body));
+            self.skip_newlines();
         }
         if self.matches(&TokenKind::Else) {
             else_branch = Some(self.block()?);
@@ -302,14 +298,22 @@ impl Parser {
         } else {
             None
         };
-        self.consume(TokenKind::Colon, "expected ':' after class declaration")?;
-        self.consume(TokenKind::Newline, "expected newline after ':'")?;
-        self.consume(TokenKind::Indent, "expected indented class body")?;
+        let (fields, methods) = self.class_body()?;
+        Ok(ClassDecl {
+            name,
+            superclass,
+            fields,
+            methods,
+        })
+    }
+
+    fn class_body(&mut self) -> IcooResult<(Vec<FieldDecl>, Vec<FunctionDecl>)> {
+        self.consume(TokenKind::LeftBrace, "expected '{' after class declaration")?;
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
-        self.skip_newlines();
-        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+        self.skip_block_layout();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             if self.matches(&TokenKind::Async) {
                 self.consume(TokenKind::Fn, "expected 'fn' after 'async'")?;
                 methods.push(self.function_decl(true)?);
@@ -335,15 +339,10 @@ impl Parser {
             } else {
                 return Err(self.error_here("expected field or method declaration in class body"));
             }
-            self.skip_newlines();
+            self.skip_block_layout();
         }
-        self.consume(TokenKind::Dedent, "expected end of class body")?;
-        Ok(ClassDecl {
-            name,
-            superclass,
-            fields,
-            methods,
-        })
+        self.consume(TokenKind::RightBrace, "expected '}' after class body")?;
+        Ok((fields, methods))
     }
 
     fn field_decl(&mut self, kind: FieldKind) -> IcooResult<FieldDecl> {
@@ -365,16 +364,14 @@ impl Parser {
     }
 
     fn block(&mut self) -> IcooResult<Vec<Stmt>> {
-        self.consume(TokenKind::Colon, "expected ':' before block")?;
-        self.consume(TokenKind::Newline, "expected newline after ':'")?;
-        self.consume(TokenKind::Indent, "expected indented block")?;
+        self.consume(TokenKind::LeftBrace, "expected '{' before block")?;
         let mut statements = Vec::new();
-        self.skip_newlines();
-        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+        self.skip_block_layout();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             statements.push(self.declaration()?);
-            self.skip_newlines();
+            self.skip_block_layout();
         }
-        self.consume(TokenKind::Dedent, "expected end of block")?;
+        self.consume(TokenKind::RightBrace, "expected '}' after block")?;
         Ok(statements)
     }
 
@@ -549,12 +546,15 @@ impl Parser {
         loop {
             if self.matches(&TokenKind::LeftParen) {
                 let mut args = Vec::new();
+                self.skip_newlines();
                 if !self.check(&TokenKind::RightParen) {
                     loop {
                         args.push(self.expression()?);
+                        self.skip_newlines();
                         if !self.matches(&TokenKind::Comma) {
                             break;
                         }
+                        self.skip_newlines();
                         if self.check(&TokenKind::RightParen) {
                             break;
                         }
@@ -610,12 +610,15 @@ impl Parser {
 
     fn array_literal(&mut self, span: Span) -> IcooResult<Expr> {
         let mut values = Vec::new();
+        self.skip_newlines();
         if !self.check(&TokenKind::RightBracket) {
             loop {
                 values.push(self.expression()?);
+                self.skip_newlines();
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }
+                self.skip_newlines();
                 if self.check(&TokenKind::RightBracket) {
                     break;
                 }
@@ -627,6 +630,7 @@ impl Parser {
 
     fn map_literal(&mut self, span: Span) -> IcooResult<Expr> {
         let mut entries = Vec::new();
+        self.skip_newlines();
         if !self.check(&TokenKind::RightBrace) {
             loop {
                 let key = match self.advance().kind.clone() {
@@ -634,16 +638,20 @@ impl Parser {
                     _ => return Err(self.error_previous("expected string key in map literal")),
                 };
                 self.consume(TokenKind::Colon, "expected ':' after map key")?;
+                self.skip_newlines();
                 let value = self.expression()?;
                 entries.push((key, value));
+                self.skip_newlines();
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }
+                self.skip_newlines();
                 if self.check(&TokenKind::RightBrace) {
                     break;
                 }
             }
         }
+        self.skip_newlines();
         self.consume(TokenKind::RightBrace, "expected '}' after map literal")?;
         Ok(Expr::Map(entries, span))
     }
@@ -737,7 +745,7 @@ impl Parser {
 
     fn consume_statement_end(&mut self) -> IcooResult<()> {
         if self.matches(&TokenKind::Newline)
-            || self.check(&TokenKind::Dedent)
+            || self.check(&TokenKind::RightBrace)
             || self.check(&TokenKind::Eof)
         {
             Ok(())
@@ -803,6 +811,18 @@ impl Parser {
         while self.check(&TokenKind::Newline) {
             self.advance();
         }
+    }
+
+    fn skip_block_layout(&mut self) {
+        while self.check(&TokenKind::Newline) {
+            self.advance();
+        }
+    }
+
+    fn is_statement_boundary(&self) -> bool {
+        self.check(&TokenKind::Newline)
+            || self.check(&TokenKind::RightBrace)
+            || self.check(&TokenKind::Eof)
     }
 
     fn error_here(&self, message: &str) -> IcooError {

@@ -3,6 +3,7 @@ use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
 use crate::parser::ast::*;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::limits;
 use crate::runtime::value::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -66,9 +67,14 @@ impl Interpreter {
                 catch_block,
             } => match self.execute_block(try_block, Environment::child(self.env.clone())) {
                 Ok(()) => Ok(()),
-                Err(IcooError::Runtime { message, span }) => {
+                Err(IcooError::Runtime { message, span, .. }) => {
                     let catch_env = Environment::child(self.env.clone());
-                    let error_text = IcooError::Runtime { message, span }.to_string();
+                    let error_text = IcooError::Runtime {
+                        message,
+                        span,
+                        trace: Vec::new(),
+                    }
+                    .to_string();
                     catch_env.borrow_mut().define(
                         catch_name.name.clone(),
                         Value::String(error_text),
@@ -102,6 +108,7 @@ impl Interpreter {
             }
             Stmt::While { condition, body } => {
                 while self.eval(condition)?.truthy() {
+                    self.check_timeout(condition.span())?;
                     match self.execute_block(body, Environment::child(self.env.clone())) {
                         Err(IcooError::Break) => break,
                         Err(IcooError::Continue) => continue,
@@ -178,27 +185,54 @@ impl Interpreter {
             Expr::Variable(name) => self.env.borrow().get(&name.name, name.span),
             Expr::Self_(span) => self.env.borrow().get("self", *span),
             Expr::Super(span) => self.env.borrow().get("super", *span),
-            Expr::Array(values, _) => {
+            Expr::Array(values, span) => {
+                if values.len() > limits::MAX_ARRAY_LEN {
+                    return Err(IcooError::runtime(
+                        format!(
+                            "array literal exceeds maximum length ({})",
+                            limits::MAX_ARRAY_LEN
+                        ),
+                        Some(*span),
+                    ));
+                }
                 let mut result = Vec::new();
                 for value in values {
                     result.push(self.eval(value)?);
                 }
                 Ok(Value::Array(Rc::new(RefCell::new(result))))
             }
-            Expr::Map(entries, _) => {
+            Expr::Map(entries, span) => {
+                if entries.len() > limits::MAX_MAP_ENTRIES {
+                    return Err(IcooError::runtime(
+                        format!(
+                            "map literal exceeds maximum entries ({})",
+                            limits::MAX_MAP_ENTRIES
+                        ),
+                        Some(*span),
+                    ));
+                }
                 let mut result = HashMap::new();
                 for (key, value) in entries {
                     result.insert(key.clone(), self.eval(value)?);
                 }
                 Ok(Value::Map(Rc::new(RefCell::new(result))))
             }
-            Expr::Template(parts, _) => {
+            Expr::Template(parts, span) => {
                 let mut result = String::new();
                 for part in parts {
                     match part {
                         TemplatePart::Text(text) => result.push_str(text),
                         TemplatePart::Expr(expr) => result.push_str(&self.eval(expr)?.display()),
                     }
+                }
+                if result.len() > limits::MAX_STRING_LEN {
+                    return Err(IcooError::runtime(
+                        format!(
+                            "template string exceeds maximum length ({})",
+                            limits::MAX_STRING_LEN
+                        ),
+                        Some(*span),
+                    ));
                 }
                 Ok(Value::String(result))
             }
@@ -207,7 +241,9 @@ impl Interpreter {
                 match op {
                     UnaryOp::Not => Ok(Value::Bool(!right.truthy())),
                     UnaryOp::Negate => match right {
-                        Value::Int(value) => Ok(Value::Int(-value)),
+                        Value::Int(value) => value.checked_neg().map(Value::Int).ok_or_else(|| {
+                            IcooError::runtime("integer overflow in negation", Some(*span))
+                        }),
                         Value::Float(value) => Ok(Value::Float(-value)),
                         _ => Err(IcooError::runtime("operand must be a number", Some(*span))),
                     },
@@ -320,7 +356,10 @@ impl Interpreter {
     ) -> IcooResult<Value> {
         match op {
             BinaryOp::Add => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Int(a), Value::Int(b)) => a
+                    .checked_add(b)
+                    .map(Value::Int)
+                    .ok_or_else(|| IcooError::runtime("integer overflow in addition", Some(span))),
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
@@ -332,10 +371,31 @@ impl Interpreter {
                     Some(span),
                 )),
             },
-            BinaryOp::Subtract => numeric(left, right, span, |a, b| a - b, |a, b| a - b),
-            BinaryOp::Multiply => numeric(left, right, span, |a, b| a * b, |a, b| a * b),
+            BinaryOp::Subtract => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| a.checked_sub(b).ok_or("integer overflow in subtraction"),
+                |a, b| Ok(a - b),
+            ),
+            BinaryOp::Multiply => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| a.checked_mul(b).ok_or("integer overflow in multiplication"),
+                |a, b| Ok(a * b),
+            ),
             BinaryOp::Divide => numeric_float(left, right, span, |a, b| a / b),
-            BinaryOp::Remainder => numeric(left, right, span, |a, b| a % b, |a, b| a % b),
+            BinaryOp::Remainder => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| {
+                    a.checked_rem(b)
+                        .ok_or("integer remainder with zero divisor")
+                },
+                |a, b| Ok(a % b),
+            ),
             BinaryOp::Equal => Ok(Value::Bool(value_equal(&left, &right))),
             BinaryOp::NotEqual => Ok(Value::Bool(!value_equal(&left, &right))),
             BinaryOp::Less => compare(left, right, span, |a, b| a < b),
@@ -346,18 +406,26 @@ impl Interpreter {
     }
 }
 
-fn numeric(
+fn numeric_checked(
     left: Value,
     right: Value,
     span: Span,
-    int_op: impl Fn(i64, i64) -> i64,
-    float_op: impl Fn(f64, f64) -> f64,
+    int_op: impl Fn(i64, i64) -> Result<i64, &'static str>,
+    float_op: impl Fn(f64, f64) -> Result<f64, &'static str>,
 ) -> IcooResult<Value> {
     match (left, right) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(int_op(a, b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(a, b))),
-        (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(a as f64, b))),
-        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(a, b as f64))),
+        (Value::Int(a), Value::Int(b)) => int_op(a, b)
+            .map(Value::Int)
+            .map_err(|msg| IcooError::runtime(msg, Some(span))),
+        (Value::Float(a), Value::Float(b)) => float_op(a, b)
+            .map(Value::Float)
+            .map_err(|msg| IcooError::runtime(msg, Some(span))),
+        (Value::Int(a), Value::Float(b)) => float_op(a as f64, b)
+            .map(Value::Float)
+            .map_err(|msg| IcooError::runtime(msg, Some(span))),
+        (Value::Float(a), Value::Int(b)) => float_op(a, b as f64)
+            .map(Value::Float)
+            .map_err(|msg| IcooError::runtime(msg, Some(span))),
         _ => Err(IcooError::runtime("operands must be numbers", Some(span))),
     }
 }

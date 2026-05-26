@@ -1,0 +1,10 @@
+[package]
+name = "icoo-agent"
+version = "0.1.0"
+description = "A minimal Pi-style agent harness written in Icoo"
+
+[run]
+entry = "src/main.icoo"
+
+[http]
+timeout_ms = 60000

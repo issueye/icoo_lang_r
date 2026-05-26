@@ -87,7 +87,5 @@ pub enum TokenKind {
     LeftArrow,
 
     Newline,
-    Indent,
-    Dedent,
     Eof,
 }

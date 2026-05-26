@@ -50,14 +50,16 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn user(req: Map<String, Any>, res: WebInoResponse):
+fn user(req: Map<String, Any>, res: WebInoResponse) {{
     let params = req.get("params")
     let query = req.get("query_params")
     res.send("id=" + params.get("id") + ";name=" + query.get("name") + ";city=" + query.get("city"))
 
-fn exact(req: Map<String, Any>, res: WebInoResponse):
+}}
+fn exact(req: Map<String, Any>, res: WebInoResponse) {{
     res.send("exact")
 
+}}
 app.get("/users/:id", user)
 app.get("/users/me", exact)
 app.listen("127.0.0.1", {}, 2)
@@ -106,9 +108,10 @@ import "std.web.ino" as ino
 
 let app = ino.App()
 
-fn home(req: Map<String, Any>, res: WebInoResponse):
+fn home(req: Map<String, Any>, res: WebInoResponse) {{
     res.send("home")
 
+}}
 app.get("/", home)
 app.listen_once("127.0.0.1", {})
 "#,

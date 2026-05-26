@@ -1,0 +1,130 @@
+import "std.io.fs" as fs
+import "std.process" as process
+
+export fn tool_specs() -> Array<Map<String, Any>> {
+    return [
+        {
+            "name": "bash",
+            "description": "Run a local shell command and return stdout, stderr, and exit status."
+        },
+        {
+            "name": "write_file",
+            "description": "Write UTF-8 text to a local file."
+        },
+        {
+            "name": "read_file",
+            "description": "Read UTF-8 text from a local file."
+        }
+    ]
+}
+
+export fn execute_tool(call: Map<String, Any>) -> Map<String, Any> {
+    let name = call.get("name")
+    let args = call.get("args")
+
+    if name == nil {
+        return {
+            "ok": false,
+            "content": "tool call missing name"
+        }
+    }
+    if args == nil {
+        args = {}
+    }
+
+    if name == "bash" {
+        return run_bash(args)
+    }
+    if name == "write_file" {
+        return write_file(args)
+    }
+    if name == "read_file" {
+        return read_file(args)
+    }
+
+    return {
+        "ok": false,
+        "content": "unknown tool: " + name.to_string()
+    }
+}
+
+fn run_bash(args: Map<String, Any>) -> Map<String, Any> {
+    let command = args.get("command")
+    if command == nil {
+        command = args.get("cmd")
+    }
+    if command == nil {
+        return {
+            "ok": false,
+            "content": "bash tool missing command"
+        }
+    }
+
+    let result = process.exec(command, {
+        "timeout_ms": 3000,
+        "max_output_bytes": 8192
+    })
+    return {
+        "ok": result.get("success"),
+        "content": result.get("stdout"),
+        "stderr": result.get("stderr"),
+        "exit_code": result.get("exit_code")
+    }
+}
+
+fn write_file(args: Map<String, Any>) -> Map<String, Any> {
+    let path = args.get("path")
+    if path == nil {
+        path = args.get("file_path")
+    }
+    if path == nil {
+        path = args.get("filename")
+    }
+
+    let content = args.get("content")
+    if content == nil {
+        content = args.get("text")
+    }
+    if content == nil {
+        content = args.get("body")
+    }
+
+    if path == nil {
+        return {
+            "ok": false,
+            "content": "write_file tool missing path"
+        }
+    }
+    if content == nil {
+        return {
+            "ok": false,
+            "content": "write_file tool missing content"
+        }
+    }
+
+    fs.write_text(path, content)
+    return {
+        "ok": true,
+        "content": "wrote " + path
+    }
+}
+
+fn read_file(args: Map<String, Any>) -> Map<String, Any> {
+    let path = args.get("path")
+    if path == nil {
+        path = args.get("file_path")
+    }
+    if path == nil {
+        path = args.get("filename")
+    }
+    if path == nil {
+        return {
+            "ok": false,
+            "content": "read_file tool missing path"
+        }
+    }
+    return {
+        "ok": true,
+        "content": fs.read_text(path)
+    }
+}

@@ -110,14 +110,18 @@ fn vm_sync_subset_control_flow_matches_ast() {
         source: r#"
 let i = 0
 let total = 0
-while i < 5:
+while i < 5 {
     i = i + 1
-    if i == 2:
+    if i == 2 {
         total = total + 20
-    elif i == 4:
+    }
+    elif i == 4 {
         total = total + 40
-    else:
+    }
+    else {
         total = total + i
+    }
+}
 print(total.to_string())
 "#,
         expected: &["69"],
@@ -129,9 +133,10 @@ fn vm_sync_subset_reports_unsupported_features() {
     let err = run_backend(
         Backend::Vm,
         r#"
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
+}
 print(add(1, 2).to_string())
 "#,
     )
@@ -180,12 +185,15 @@ fn sync_control_flow_matches() {
             name: "if_elif_else",
             source: r#"
 let value = 7
-if value < 3:
+if value < 3 {
     print("small")
-elif value < 10:
+}
+elif value < 10 {
     print("medium")
-else:
+}
+else {
     print("large")
+}
 "#,
             expected: &["medium"],
         },
@@ -194,13 +202,16 @@ else:
             source: r#"
 let i = 0
 let values = []
-while i < 6:
+while i < 6 {
     i = i + 1
-    if i == 2:
+    if i == 2 {
         continue
-    if i == 5:
+    }
+    if i == 5 {
         break
+    }
     values.push(i)
+}
 print(values.join(","))
 "#,
             expected: &["1,3,4"],
@@ -214,12 +225,14 @@ fn sync_functions_and_closures_match() {
         Case {
             name: "function_call_and_return",
             source: r#"
-fn add(a: Int, b: Int) -> Int:
+fn add(a: Int, b: Int) -> Int {
     return a + b
 
-fn describe(value: Int) -> String:
+}
+fn describe(value: Int) -> String {
     return "value=" + value.to_string()
 
+}
 print(describe(add(2, 5)))
 "#,
             expected: &["value=7"],
@@ -227,11 +240,13 @@ print(describe(add(2, 5)))
         Case {
             name: "recursive_function",
             source: r#"
-fn fact(n: Int) -> Int:
-    if n <= 1:
+fn fact(n: Int) -> Int {
+    if n <= 1 {
         return 1
+    }
     return n * fact(n - 1)
 
+}
 print(fact(5).to_string())
 "#,
             expected: &["120"],
@@ -239,11 +254,13 @@ print(fact(5).to_string())
         Case {
             name: "closure_captures_outer_binding",
             source: r#"
-fn make_prefixer(prefix: String) -> Function:
-    fn apply(value: String) -> String:
+fn make_prefixer(prefix: String) -> Function {
+    fn apply(value: String) -> String {
         return prefix + value
+    }
     return apply
 
+}
 let add_id = make_prefixer("id:")
 print(add_id("42"))
 "#,
@@ -295,27 +312,33 @@ fn sync_classes_and_inheritance_match() {
     assert_sync_subset_cases(&[Case {
         name: "class_fields_methods_super",
         source: r#"
-class Animal:
+class Animal {
     let name: String
 
-    fn init(self, name: String):
+    fn init(self, name: String) {
         self.name = name
 
-    fn label(self) -> String:
+    }
+    fn label(self) -> String {
         return "animal:" + self.name
 
-class Dog <- Animal:
+    }
+}
+class Dog <- Animal {
     let breed: String
     final owner_id: String
 
-    fn init(self, name: String, breed: String, owner_id: String):
+    fn init(self, name: String, breed: String, owner_id: String) {
         super.init(name)
         self.breed = breed
         self.owner_id = owner_id
 
-    fn label(self) -> String:
+    }
+    fn label(self) -> String {
         return super.label() + ":" + self.breed + ":" + self.owner_id
 
+    }
+}
 let dog = Dog("Lucky", "Collie", "U001")
 print(dog.label())
 print(dog.type_name())

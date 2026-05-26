@@ -1,12 +1,16 @@
-use crate::error::IcooResult;
-use crate::parser::ast::Program;
+use crate::error::{IcooError, IcooResult};
+use crate::lexer::token::Span;
+use crate::parser::ast::{Program, Stmt};
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::http_config::RuntimeHttpConfig;
+use crate::runtime::logging::RuntimeLogger;
 use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 mod args;
 mod calls;
@@ -14,9 +18,13 @@ mod classes;
 mod coroutines;
 mod eval;
 mod formats;
+mod http_alpn;
 mod http_client;
 mod http_common;
+mod http_proxy;
+mod http_redirect;
 mod http_server;
+mod http_url;
 mod methods;
 mod modules;
 mod tasks;
@@ -43,6 +51,13 @@ pub struct Interpreter {
     loading_modules: Vec<PathBuf>,
     current_module_dir: Option<PathBuf>,
     permissions: RuntimePermissions,
+    logger: RuntimeLogger,
+    http_config: RuntimeHttpConfig,
+    http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+    http_tls_config: RefCell<Option<Arc<rustls::ClientConfig>>>,
+    call_depth: usize,
+    runtime_config: crate::runtime::config::RuntimeConfig,
+    execution_deadline: Option<std::time::Instant>,
 }
 
 impl Default for Interpreter {
@@ -67,11 +82,73 @@ impl Interpreter {
         Self::with_output_and_permissions(|line| println!("{}", line), permissions)
     }
 
+    pub fn with_logger(logger: RuntimeLogger) -> Self {
+        Self::with_output_permissions_and_logger(
+            |line| println!("{}", line),
+            RuntimePermissions::default(),
+            logger,
+        )
+    }
+
     pub fn with_output_and_permissions<F>(output: F, permissions: RuntimePermissions) -> Self
     where
         F: FnMut(String) + 'static,
     {
+        Self::with_output_permissions_and_logger(output, permissions, RuntimeLogger::default())
+    }
+
+    pub fn with_output_permissions_and_logger<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+    ) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        Self::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            permissions,
+            logger,
+            None,
+            RuntimeHttpConfig::default(),
+            crate::runtime::config::RuntimeConfig::default(),
+        )
+    }
+
+    pub fn with_output_permissions_logger_and_tls_roots<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+        http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+    ) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        Self::with_output_permissions_logger_tls_roots_and_http_config(
+            output,
+            permissions,
+            logger,
+            http_tls_roots,
+            RuntimeHttpConfig::default(),
+            crate::runtime::config::RuntimeConfig::default(),
+        )
+    }
+
+    pub fn with_output_permissions_logger_tls_roots_and_http_config<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+        http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+        http_config: RuntimeHttpConfig,
+        runtime_config: crate::runtime::config::RuntimeConfig,
+    ) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
         let env = Environment::new();
+        let deadline = runtime_config
+            .exec_timeout
+            .map(|t| std::time::Instant::now() + t);
         let mut interpreter = Self {
             env,
             output: Box::new(output),
@@ -81,6 +158,13 @@ impl Interpreter {
             loading_modules: Vec::new(),
             current_module_dir: None,
             permissions,
+            logger,
+            http_config,
+            http_tls_roots,
+            http_tls_config: RefCell::new(None),
+            call_depth: 0,
+            runtime_config,
+            execution_deadline: deadline,
         };
         interpreter.install_natives();
         interpreter
@@ -90,11 +174,43 @@ impl Interpreter {
         &self.permissions
     }
 
-    pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {
-        for stmt in &program.statements {
-            self.execute(stmt)?;
+    pub fn logger(&self) -> &RuntimeLogger {
+        &self.logger
+    }
+
+    pub fn http_config(&self) -> &RuntimeHttpConfig {
+        &self.http_config
+    }
+
+    pub fn runtime_config(&self) -> &crate::runtime::config::RuntimeConfig {
+        &self.runtime_config
+    }
+
+    fn check_timeout(&self, span: Span) -> IcooResult<()> {
+        if let Some(deadline) = self.execution_deadline {
+            if std::time::Instant::now() > deadline {
+                return Err(IcooError::runtime("execution timed out", Some(span)));
+            }
         }
         Ok(())
+    }
+
+    pub fn interpret(&mut self, program: &Program) -> IcooResult<Value> {
+        let mut last = Value::Nil;
+        for stmt in &program.statements {
+            last = self.execute_result(stmt)?;
+        }
+        Ok(last)
+    }
+
+    fn execute_result(&mut self, stmt: &Stmt) -> IcooResult<Value> {
+        match stmt {
+            Stmt::Expr(expr) => self.eval(expr),
+            _ => {
+                self.execute(stmt)?;
+                Ok(Value::Nil)
+            }
+        }
     }
 
     fn install_natives(&mut self) {

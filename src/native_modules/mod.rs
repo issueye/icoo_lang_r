@@ -4,6 +4,7 @@ pub(crate) mod env;
 pub(crate) mod io;
 pub(crate) mod io_fs;
 pub(crate) mod json;
+pub(crate) mod log;
 pub(crate) mod math;
 pub(crate) mod net_http_client;
 pub(crate) mod net_http_server;
@@ -14,6 +15,8 @@ pub(crate) mod net_sse_server;
 pub(crate) mod net_ws_client;
 pub(crate) mod net_ws_server;
 pub(crate) mod os;
+pub(crate) mod path;
+pub(crate) mod process;
 pub(crate) mod time;
 pub(crate) mod toml;
 pub(crate) mod web_ino;
@@ -49,6 +52,7 @@ pub enum NativeAritySpec {
 pub const SPECS: &[NativeModuleSpec] = &[
     bytes::SPEC,
     buffer::SPEC,
+    log::SPEC,
     math::SPEC,
     time::SPEC,
     json::SPEC,
@@ -58,6 +62,8 @@ pub const SPECS: &[NativeModuleSpec] = &[
     io::SPEC,
     io_fs::SPEC,
     os::SPEC,
+    path::SPEC,
+    process::SPEC,
     net_http_client::SPEC,
     net_http_server::SPEC,
     net_ws_client::SPEC,
@@ -123,12 +129,15 @@ pub(crate) fn call(
         "Buffer" => buffer::call(name, args, span),
         "time" => time::call(name, args, span),
         "json" => json::call(name, args, span),
+        "log" => log::call(runtime, name, args, span),
         "yaml" => yaml::call(name, args, span),
         "toml" => toml::call(name, args, span),
         "env" => env::call(runtime, name, args, span),
         "io" => io::call(runtime, name, args, span),
         "io.fs" => io_fs::call(runtime, name, args, span),
         "os" => os::call(runtime, name, args, span),
+        "path" => path::call(name, args, span),
+        "process" => process::call(runtime, name, args, span),
         "net.http.client" => net_http_client::call(runtime, name, args, span),
         "net.http.server" => net_http_server::call(runtime, name, args, span),
         "net.ws.client" => net_ws_client::call(runtime, name, args, span),

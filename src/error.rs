@@ -2,12 +2,43 @@ use crate::lexer::token::Span;
 use std::fmt;
 
 #[derive(Debug, Clone)]
+pub struct StackFrame {
+    pub name: String,
+    pub span: Span,
+    pub kind: StackFrameKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StackFrameKind {
+    Function,
+    NativeFunction,
+    ModuleTopLevel,
+    Coroutine,
+}
+
+#[derive(Debug, Clone)]
 pub enum IcooError {
-    Lexer { message: String, span: Span },
-    Parse { message: String, span: Span },
-    Resolve { message: String, span: Span },
-    Type { message: String, span: Span },
-    Runtime { message: String, span: Option<Span> },
+    Lexer {
+        message: String,
+        span: Span,
+    },
+    Parse {
+        message: String,
+        span: Span,
+    },
+    Resolve {
+        message: String,
+        span: Span,
+    },
+    Type {
+        message: String,
+        span: Span,
+    },
+    Runtime {
+        message: String,
+        span: Option<Span>,
+        trace: Vec<StackFrame>,
+    },
     Return(crate::runtime::value::Value),
     Await(crate::runtime::value::Value),
     Break,
@@ -47,6 +78,13 @@ impl IcooError {
         Self::Runtime {
             message: message.into(),
             span,
+            trace: Vec::new(),
+        }
+    }
+
+    pub fn push_frame(&mut self, name: String, span: Span, kind: StackFrameKind) {
+        if let IcooError::Runtime { trace, .. } = self {
+            trace.push(StackFrame { name, span, kind });
         }
     }
 }
@@ -70,16 +108,28 @@ impl fmt::Display for IcooError {
             IcooError::Type { message, span } => {
                 write!(f, "{}:{}: type error: {}", span.line, span.column, message)
             }
-            IcooError::Runtime { message, span } => {
+            IcooError::Runtime {
+                message,
+                span,
+                trace,
+            } => {
                 if let Some(span) = span {
                     write!(
                         f,
                         "{}:{}: runtime error: {}",
                         span.line, span.column, message
-                    )
+                    )?;
                 } else {
-                    write!(f, "runtime error: {}", message)
+                    write!(f, "runtime error: {}", message)?;
                 }
+                for frame in trace.iter().rev() {
+                    write!(
+                        f,
+                        "\n  at {} ({}:{})",
+                        frame.name, frame.span.line, frame.span.column
+                    )?;
+                }
+                Ok(())
             }
             IcooError::Return(_) => write!(f, "internal return signal"),
             IcooError::Await(_) => write!(f, "internal await signal"),

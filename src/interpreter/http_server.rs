@@ -9,7 +9,7 @@ pub(crate) fn http_server_serve_once(
     body: &str,
     span: Span,
 ) -> IcooResult<()> {
-    permissions.check_net_listen_target(host, port, span)?;
+    permissions.check_net_listen_endpoint(host, port, span)?;
     let listener = std::net::TcpListener::bind((host, port)).map_err(|err| {
         IcooError::runtime(format!("http server bind failed: {}", err), Some(span))
     })?;

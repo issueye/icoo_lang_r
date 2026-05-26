@@ -1,0 +1,31 @@
+export fn maybe_compact(config: Map<String, Any>, session: Map<String, Any>) -> Bool {
+    let messages = session.get("messages")
+    let summaries = session.get("summaries")
+    let threshold = config.get("runtime").get("compact_after_messages")
+
+    if messages.len() <= threshold {
+        return false
+    }
+    if summaries.len() > 0 {
+        return false
+    }
+
+    summaries.push({
+        "kind": "compact",
+        "content": compact_content(messages)
+    })
+    return true
+}
+
+fn compact_content(messages: Array<Map<String, Any>>) -> String {
+    let bash_state = "bash completed"
+    let index = 0
+    while index < messages.len() {
+        let item = messages.at(index)
+        if item.get("role") == "tool" and item.get("name") == "bash" and item.get("ok") == false {
+            bash_state = "bash returned a diagnostic result"
+        }
+        index = index + 1
+    }
+    return "Context compacted after " + messages.len().to_string() + " messages. Key state: " + bash_state + ", file note was written, read_file verified the note."
+}

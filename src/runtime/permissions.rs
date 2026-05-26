@@ -11,6 +11,7 @@ pub struct RuntimePermissions {
     pub os_info: PermissionRule,
     pub net_connect: PermissionRule,
     pub net_listen: PermissionRule,
+    pub process_exec: PermissionRule,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +39,7 @@ impl RuntimePermissions {
             os_info: PermissionRule::AllowAll,
             net_connect: PermissionRule::AllowAll,
             net_listen: PermissionRule::AllowAll,
+            process_exec: PermissionRule::AllowAll,
         }
     }
 
@@ -50,6 +52,7 @@ impl RuntimePermissions {
             os_info: PermissionRule::DenyAll,
             net_connect: PermissionRule::DenyAll,
             net_listen: PermissionRule::DenyAll,
+            process_exec: PermissionRule::DenyAll,
         }
     }
 
@@ -81,20 +84,64 @@ impl RuntimePermissions {
         self.net_listen.allows()
     }
 
+    pub fn can_exec_process(&self) -> bool {
+        self.process_exec.allows()
+    }
+
     pub fn check_fs_read(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_read_fs(), "fs.read", None, span)
+    }
+
+    pub fn check_fs_read_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.fs_read.allows_path(path.as_ref()),
+            "fs.read",
+            Some(format!("path '{}'", path.as_ref().display())),
+            span,
+        )
     }
 
     pub fn check_fs_write(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_write_fs(), "fs.write", None, span)
     }
 
+    pub fn check_fs_write_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.fs_write.allows_path(path.as_ref()),
+            "fs.write",
+            Some(format!("path '{}'", path.as_ref().display())),
+            span,
+        )
+    }
+
     pub fn check_fs_list(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_list_fs(), "fs.list", None, span)
     }
 
+    pub fn check_fs_list_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.fs_list.allows_path(path.as_ref()),
+            "fs.list",
+            Some(format!("path '{}'", path.as_ref().display())),
+            span,
+        )
+    }
+
     pub fn check_env_read(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_read_env(), "env.read", None, span)
+    }
+
+    pub fn check_env_read_key(&self, key: &str, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.env_read.allows_env_key(key),
+            "env.read",
+            Some(format!("key '{}'", key)),
+            span,
+        )
+    }
+
+    pub fn check_env_key(&self, key: &str, span: Span) -> IcooResult<()> {
+        self.check_env_read_key(key, span)
     }
 
     pub fn check_os_info(&self, span: Span) -> IcooResult<()> {
@@ -105,34 +152,38 @@ impl RuntimePermissions {
         check_permission(self.can_connect_net(), "net.connect", None, span)
     }
 
+    pub fn check_net_connect_endpoint(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.net_connect.allows_net_target(host, port),
+            "net.connect",
+            Some(format!("endpoint '{}'", format_endpoint(host, port))),
+            span,
+        )
+    }
+
+    pub fn check_net_connect_target(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
+        self.check_net_connect_endpoint(host, port, span)
+    }
+
     pub fn check_net_listen(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_listen_net(), "net.listen", None, span)
     }
 
-    pub fn check_fs_read_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
-        self.fs_read.check_path("fs.read", path.as_ref(), span)
-    }
-
-    pub fn check_fs_write_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
-        self.fs_write.check_path("fs.write", path.as_ref(), span)
-    }
-
-    pub fn check_fs_list_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
-        self.fs_list.check_path("fs.list", path.as_ref(), span)
-    }
-
-    pub fn check_env_key(&self, key: &str, span: Span) -> IcooResult<()> {
-        self.env_read.check_env_key("env.read", key, span)
-    }
-
-    pub fn check_net_connect_target(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
-        self.net_connect
-            .check_net_target("net.connect", host, port, span)
+    pub fn check_net_listen_endpoint(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
+        check_permission(
+            self.net_listen.allows_net_target(host, port),
+            "net.listen",
+            Some(format!("endpoint '{}'", format_endpoint(host, port))),
+            span,
+        )
     }
 
     pub fn check_net_listen_target(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
-        self.net_listen
-            .check_net_target("net.listen", host, port, span)
+        self.check_net_listen_endpoint(host, port, span)
+    }
+
+    pub fn check_process_exec(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_exec_process(), "process.exec", None, span)
     }
 }
 
@@ -166,57 +217,54 @@ impl PermissionRule {
         Self::AllowNetTargets(targets.into_iter().collect())
     }
 
-    pub fn allows(&self) -> bool {
-        !matches!(self, Self::DenyAll)
-    }
-
-    fn check_path(&self, capability: &str, path: &Path, span: Span) -> IcooResult<()> {
-        let target = normalize_path(path);
-        let allowed = match self {
-            Self::AllowAll => true,
-            Self::AllowPaths(paths) => paths
-                .iter()
-                .map(|path| normalize_path(path))
-                .any(|allowed_path| target.starts_with(allowed_path)),
-            Self::DenyAll | Self::AllowEnvKeys(_) | Self::AllowNetTargets(_) => false,
-        };
-        check_permission(
-            allowed,
-            capability,
-            Some(target.to_string_lossy().into_owned()),
-            span,
+    pub fn allow_net_endpoints<I, H>(endpoints: I) -> Self
+    where
+        I: IntoIterator<Item = (H, u16)>,
+        H: Into<String>,
+    {
+        Self::AllowNetTargets(
+            endpoints
+                .into_iter()
+                .map(|(host, port)| NetTargetRule::host_port(host, port))
+                .collect(),
         )
     }
 
-    fn check_env_key(&self, capability: &str, key: &str, span: Span) -> IcooResult<()> {
-        let allowed = match self {
-            Self::AllowAll => true,
-            Self::AllowEnvKeys(keys) => keys.iter().any(|allowed| env_key_matches(allowed, key)),
-            Self::DenyAll | Self::AllowPaths(_) | Self::AllowNetTargets(_) => false,
-        };
-        check_permission(allowed, capability, Some(key.to_string()), span)
+    pub fn allows(&self) -> bool {
+        matches!(self, Self::AllowAll)
     }
 
-    fn check_net_target(
-        &self,
-        capability: &str,
-        host: &str,
-        port: u16,
-        span: Span,
-    ) -> IcooResult<()> {
-        let allowed = match self {
+    fn allows_path(&self, path: &Path) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::AllowPaths(allowed_paths) => {
+                let requested = normalize_path(path);
+                !requested.as_os_str().is_empty()
+                    && allowed_paths.iter().any(|allowed| {
+                        let allowed = normalize_path(allowed);
+                        !allowed.as_os_str().is_empty() && requested.starts_with(allowed)
+                    })
+            }
+            Self::DenyAll | Self::AllowEnvKeys(_) | Self::AllowNetTargets(_) => false,
+        }
+    }
+
+    fn allows_env_key(&self, key: &str) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::AllowEnvKeys(keys) => keys.iter().any(|allowed| env_keys_equal(allowed, key)),
+            Self::DenyAll | Self::AllowPaths(_) | Self::AllowNetTargets(_) => false,
+        }
+    }
+
+    fn allows_net_target(&self, host: &str, port: u16) -> bool {
+        match self {
             Self::AllowAll => true,
             Self::AllowNetTargets(targets) => {
                 targets.iter().any(|target| target.matches(host, port))
             }
             Self::DenyAll | Self::AllowPaths(_) | Self::AllowEnvKeys(_) => false,
-        };
-        check_permission(
-            allowed,
-            capability,
-            Some(format!("{}:{}", host, port)),
-            span,
-        )
+        }
     }
 }
 
@@ -299,16 +347,26 @@ fn normalize_lexically(path: &Path) -> PathBuf {
             Component::ParentDir => {
                 normalized.pop();
             }
-            _ => normalized.push(component.as_os_str()),
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
         }
     }
     normalized
 }
 
-fn env_key_matches(allowed: &str, key: &str) -> bool {
+fn env_keys_equal(left: &str, right: &str) -> bool {
     if cfg!(windows) {
-        allowed.eq_ignore_ascii_case(key)
+        left.eq_ignore_ascii_case(right)
     } else {
-        allowed == key
+        left == right
+    }
+}
+
+fn format_endpoint(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
     }
 }

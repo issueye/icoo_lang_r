@@ -1,3 +1,4 @@
+use icoo_lang_r::runtime::limits::MAX_BYTES_LEN;
 use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
@@ -176,4 +177,20 @@ json.stringify({"data": "abc".to_bytes()})
     .unwrap_err();
 
     assert!(err.contains("Bytes cannot be represented as JSON"));
+}
+
+#[test]
+fn rejects_oversized_file_bytes() {
+    fs::create_dir_all("target/icoo_bytes").unwrap();
+    let path = "target/icoo_bytes/oversized.bin";
+    let file = fs::File::create(path).unwrap();
+    file.set_len((MAX_BYTES_LEN + 1) as u64).unwrap();
+
+    let err = run(r#"
+import "std.io.fs" as fs
+fs.read_bytes("target/icoo_bytes/oversized.bin")
+"#)
+    .unwrap_err();
+
+    assert!(err.contains("bytes value exceeds maximum size"), "{err}");
 }

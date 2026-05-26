@@ -2,6 +2,7 @@ use super::{NativeAritySpec, NativeMethodSpec, NativeModuleSpec};
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::{expect_arity, expect_string};
 use crate::lexer::token::Span;
+use crate::runtime::limits::check_bytes_len;
 use crate::runtime::value::{bytes_from_base64, bytes_from_hex, Value};
 use std::rc::Rc;
 
@@ -54,24 +55,25 @@ fn dispatch(name: &str, args: Vec<Value>, span: Span) -> IcooResult<Value> {
         "from_hex" => {
             expect_arity(&args, 1, span)?;
             let text = expect_string(&args[0], span)?;
-            bytes_from_hex(&text)
-                .map(|bytes| Value::Bytes(Rc::new(bytes)))
-                .map_err(|err| {
-                    IcooError::runtime(format!("Bytes.from_hex() failed: {}", err), Some(span))
-                })
+            let bytes = bytes_from_hex(&text).map_err(|err| {
+                IcooError::runtime(format!("Bytes.from_hex() failed: {}", err), Some(span))
+            })?;
+            check_bytes_len(bytes.len(), span)?;
+            Ok(Value::Bytes(Rc::new(bytes)))
         }
         "from_base64" => {
             expect_arity(&args, 1, span)?;
             let text = expect_string(&args[0], span)?;
-            bytes_from_base64(&text)
-                .map(|bytes| Value::Bytes(Rc::new(bytes)))
-                .map_err(|err| {
-                    IcooError::runtime(format!("Bytes.from_base64() failed: {}", err), Some(span))
-                })
+            let bytes = bytes_from_base64(&text).map_err(|err| {
+                IcooError::runtime(format!("Bytes.from_base64() failed: {}", err), Some(span))
+            })?;
+            check_bytes_len(bytes.len(), span)?;
+            Ok(Value::Bytes(Rc::new(bytes)))
         }
         "from_string" => {
             expect_arity(&args, 1, span)?;
             let text = expect_string(&args[0], span)?;
+            check_bytes_len(text.len(), span)?;
             Ok(Value::Bytes(Rc::new(text.into_bytes())))
         }
         _ => unreachable!("native module method should be registered before dispatch"),

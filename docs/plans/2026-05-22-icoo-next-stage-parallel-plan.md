@@ -367,14 +367,16 @@ git commit -m "Enforce runtime permissions for native modules"
 1. 补测试：`run_until()` 只等待目标 task。
 
 ```python
-async fn fast() -> String:
+async fn fast() -> String {
     return "done"
 
-async fn slow() -> String:
+}
+async fn slow() -> String {
     let delay = sleep(5000)
     await delay
     return "slow"
 
+}
 let loop = EventLoop(2)
 let fast_task = loop.spawn(fast())
 let slow_task = loop.spawn(slow())
@@ -444,16 +446,19 @@ app.limit_body(bytes)
 **Handler shape:**
 
 ```python
-fn middleware(req: Map<String, Any>, res: WebInoResponse):
+fn middleware(req: Map<String, Any>, res: WebInoResponse) {
     req.get("headers")
 
-fn not_found(req: Map<String, Any>, res: WebInoResponse):
+}
+fn not_found(req: Map<String, Any>, res: WebInoResponse) {
     res.status(404)
     res.send("custom 404")
 
-fn error(req: Map<String, Any>, res: WebInoResponse, err: String):
+}
+fn error(req: Map<String, Any>, res: WebInoResponse, err: String) {
     res.status(500)
     res.send(err)
+}
 ```
 
 **Steps:**
@@ -636,8 +641,8 @@ cargo test --test web_ino_perf -- --ignored --nocapture
 
 建议下一轮直接做一个低冲突任务：
 
-1. 权限模型从 allow/deny 扩展到路径、host、port 和环境变量 key 规则。
-2. 保持默认 allow-all，并补受限模式矩阵测试。
-3. 跑 permissions_matrix、language 和完整 `cargo test`。
+1. 评估是否把固定大小限制升级为 embedding runtime 配置。
+2. 补 WebIno request 侧 streaming 设计，并继续稳定资源白名单配置入口。
+3. 跑 permissions_matrix、web_ino_response_headers、http_client_bytes、bytes 和完整 `cargo test`。
 
 这一步能把宿主能力边界推进到更适合嵌入和生产场景。
