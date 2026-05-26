@@ -142,7 +142,10 @@ fn eval_unary(op: UnaryOp, value: Value) -> IcooResult<Value> {
     match op {
         UnaryOp::Not => Ok(Value::Bool(!value.truthy())),
         UnaryOp::Negate => match value {
-            Value::Int(value) => Ok(Value::Int(-value)),
+            Value::Int(value) => value
+                .checked_neg()
+                .map(Value::Int)
+                .ok_or_else(|| runtime_error("integer overflow in negation")),
             Value::Float(value) => Ok(Value::Float(-value)),
             _ => Err(runtime_error("operand must be a number")),
         },
@@ -152,7 +155,10 @@ fn eval_unary(op: UnaryOp, value: Value) -> IcooResult<Value> {
 fn eval_binary(left: Value, op: BinaryOp, right: Value) -> IcooResult<Value> {
     match op {
         BinaryOp::Add => match (left, right) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Int(a), Value::Int(b)) => a
+                .checked_add(b)
+                .map(Value::Int)
+                .ok_or_else(|| runtime_error("integer overflow in addition")),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
@@ -161,10 +167,16 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> IcooResult<Value> {
             (a, Value::String(b)) => Ok(Value::String(a.display() + &b)),
             _ => Err(runtime_error("operands must be numbers or strings")),
         },
-        BinaryOp::Subtract => numeric(left, right, |a, b| a - b, |a, b| a - b),
-        BinaryOp::Multiply => numeric(left, right, |a, b| a * b, |a, b| a * b),
+        BinaryOp::Subtract => numeric_checked(left, right, |a, b| {
+            a.checked_sub(b).ok_or("integer overflow in subtraction")
+        }, |a, b| Ok(a - b)),
+        BinaryOp::Multiply => numeric_checked(left, right, |a, b| {
+            a.checked_mul(b).ok_or("integer overflow in multiplication")
+        }, |a, b| Ok(a * b)),
         BinaryOp::Divide => numeric_float(left, right, |a, b| a / b),
-        BinaryOp::Remainder => numeric(left, right, |a, b| a % b, |a, b| a % b),
+        BinaryOp::Remainder => numeric_checked(left, right, |a, b| {
+            a.checked_rem(b).ok_or("integer remainder with zero divisor")
+        }, |a, b| Ok(a % b)),
         BinaryOp::Equal => Ok(Value::Bool(value_equal(&left, &right))),
         BinaryOp::NotEqual => Ok(Value::Bool(!value_equal(&left, &right))),
         BinaryOp::Less => compare(left, right, |a, b| a < b),
@@ -174,17 +186,25 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> IcooResult<Value> {
     }
 }
 
-fn numeric(
+fn numeric_checked(
     left: Value,
     right: Value,
-    int_op: impl Fn(i64, i64) -> i64,
-    float_op: impl Fn(f64, f64) -> f64,
+    int_op: impl Fn(i64, i64) -> Result<i64, &'static str>,
+    float_op: impl Fn(f64, f64) -> Result<f64, &'static str>,
 ) -> IcooResult<Value> {
     match (left, right) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(int_op(a, b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(a, b))),
-        (Value::Int(a), Value::Float(b)) => Ok(Value::Float(float_op(a as f64, b))),
-        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(float_op(a, b as f64))),
+        (Value::Int(a), Value::Int(b)) => int_op(a, b)
+            .map(Value::Int)
+            .map_err(|msg| runtime_error(msg)),
+        (Value::Float(a), Value::Float(b)) => float_op(a, b)
+            .map(Value::Float)
+            .map_err(|msg| runtime_error(msg)),
+        (Value::Int(a), Value::Float(b)) => float_op(a as f64, b)
+            .map(Value::Float)
+            .map_err(|msg| runtime_error(msg)),
+        (Value::Float(a), Value::Int(b)) => float_op(a, b as f64)
+            .map(Value::Float)
+            .map_err(|msg| runtime_error(msg)),
         _ => Err(runtime_error("operands must be numbers")),
     }
 }
