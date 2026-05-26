@@ -9,6 +9,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
+pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
 use std::path::Path;
 
@@ -47,6 +48,64 @@ pub fn run_source_with_permissions(
 ) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter = interpreter::Interpreter::with_permissions(permissions);
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_logger(source: &str, logger: RuntimeLogger) -> Result<(), IcooError> {
+    run_source_with_permissions_and_logger(source, RuntimePermissions::default(), logger)
+}
+
+pub fn run_source_with_permissions_and_logger(
+    source: &str,
+    permissions: RuntimePermissions,
+    logger: RuntimeLogger,
+) -> Result<(), IcooError> {
+    let program = parse_and_check(source)?;
+    let mut interpreter = interpreter::Interpreter::with_output_permissions_and_logger(
+        |line| println!("{}", line),
+        permissions,
+        logger,
+    );
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_http_tls_roots(
+    source: &str,
+    roots: rustls::RootCertStore,
+) -> Result<(), IcooError> {
+    run_source_with_permissions_and_http_tls_roots(source, RuntimePermissions::default(), roots)
+}
+
+pub fn run_source_with_permissions_and_http_tls_roots(
+    source: &str,
+    permissions: RuntimePermissions,
+    roots: rustls::RootCertStore,
+) -> Result<(), IcooError> {
+    let program = parse_and_check(source)?;
+    let mut interpreter = interpreter::Interpreter::with_output_permissions_logger_and_tls_roots(
+        |line| println!("{}", line),
+        permissions,
+        RuntimeLogger::default(),
+        Some(std::sync::Arc::new(roots)),
+    );
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_output_and_http_tls_roots<F>(
+    source: &str,
+    output: F,
+    roots: rustls::RootCertStore,
+) -> Result<(), IcooError>
+where
+    F: FnMut(String) + 'static,
+{
+    let program = parse_and_check(source)?;
+    let mut interpreter = interpreter::Interpreter::with_output_permissions_logger_and_tls_roots(
+        output,
+        RuntimePermissions::default(),
+        RuntimeLogger::default(),
+        Some(std::sync::Arc::new(roots)),
+    );
     interpreter.interpret(&program)
 }
 

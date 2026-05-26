@@ -31,6 +31,7 @@ fn native_module_registry_matches_current_standard_library_surface() {
         vec![
             "Bytes",
             "Buffer",
+            "std.log",
             "std.math",
             "std.time",
             "std.json",
@@ -40,6 +41,7 @@ fn native_module_registry_matches_current_standard_library_surface() {
             "std.io",
             "std.io.fs",
             "std.os",
+            "std.path",
             "std.net.http.client",
             "std.net.http.server",
             "std.web.ino",
@@ -117,6 +119,10 @@ fn native_module_method_specs_cover_registry_and_lookup() {
         "create"
     ));
     assert!(icoo_lang_r::native_modules::has_method("std.os", "pid"));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.path", "basename"
+    ));
+    assert!(icoo_lang_r::native_modules::has_method("std.log", "info"));
     assert!(!icoo_lang_r::native_modules::has_method(
         "std.io.fs",
         "missing"
@@ -152,6 +158,20 @@ ino.create(1)
 "#)
     .unwrap_err();
     assert!(err.contains("type error: method expected 0 arguments but got 1"));
+
+    let err = run(r#"
+import "std.path" as path
+path.basename(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.log" as log
+log.info(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
 }
 
 #[test]
@@ -161,6 +181,8 @@ import "std.math" as std_math
 import "std.time" as std_time
 import "std.json" as std_json
 import "std.env" as std_env
+import "std.path" as std_path
+import "std.log" as std_log
 
 print(std_math.max(4, 7).to_string())
 print(std_math.floor(3.8).to_string())
@@ -173,10 +195,16 @@ print(decoded.get("items").at(1).to_string())
 
 print(std_env.has("__ICOO_NATIVE_MATRIX_MISSING__").to_string())
 print(std_env.get("__ICOO_NATIVE_MATRIX_MISSING__").to_string())
+print(std_path.basename("alpha/beta.txt"))
+print(std_path.extension("alpha/beta.txt"))
+std_log.info("matrix log")
 "#)
     .unwrap();
 
-    assert_eq!(output, vec!["7", "3", "true", "Icoo", "2", "false", "nil"]);
+    assert_eq!(
+        output,
+        vec!["7", "3", "true", "Icoo", "2", "false", "nil", "beta.txt", "txt",]
+    );
 }
 
 #[test]
@@ -253,10 +281,10 @@ print(server.to_string().contains("std.net.http.server").to_string())
 
     let err = run(r#"
 import "std.net.http.client" as client
-client.get("https://example.invalid/")
+client.get("ftp://example.invalid/")
 "#)
     .unwrap_err();
-    assert!(err.contains("only http:// URLs are supported"));
+    assert!(err.contains("only http:// and https:// URLs are supported"));
 
     let err = run(r#"
 import "std.net.http.server" as server

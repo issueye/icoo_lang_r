@@ -1,12 +1,14 @@
 use crate::error::IcooResult;
 use crate::parser::ast::Program;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
+use crate::runtime::logging::RuntimeLogger;
 use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 mod args;
 mod calls;
@@ -43,6 +45,9 @@ pub struct Interpreter {
     loading_modules: Vec<PathBuf>,
     current_module_dir: Option<PathBuf>,
     permissions: RuntimePermissions,
+    logger: RuntimeLogger,
+    http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+    http_tls_config: RefCell<Option<Arc<rustls::ClientConfig>>>,
 }
 
 impl Default for Interpreter {
@@ -67,7 +72,38 @@ impl Interpreter {
         Self::with_output_and_permissions(|line| println!("{}", line), permissions)
     }
 
+    pub fn with_logger(logger: RuntimeLogger) -> Self {
+        Self::with_output_permissions_and_logger(
+            |line| println!("{}", line),
+            RuntimePermissions::default(),
+            logger,
+        )
+    }
+
     pub fn with_output_and_permissions<F>(output: F, permissions: RuntimePermissions) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        Self::with_output_permissions_and_logger(output, permissions, RuntimeLogger::default())
+    }
+
+    pub fn with_output_permissions_and_logger<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+    ) -> Self
+    where
+        F: FnMut(String) + 'static,
+    {
+        Self::with_output_permissions_logger_and_tls_roots(output, permissions, logger, None)
+    }
+
+    pub fn with_output_permissions_logger_and_tls_roots<F>(
+        output: F,
+        permissions: RuntimePermissions,
+        logger: RuntimeLogger,
+        http_tls_roots: Option<Arc<rustls::RootCertStore>>,
+    ) -> Self
     where
         F: FnMut(String) + 'static,
     {
@@ -81,6 +117,9 @@ impl Interpreter {
             loading_modules: Vec::new(),
             current_module_dir: None,
             permissions,
+            logger,
+            http_tls_roots,
+            http_tls_config: RefCell::new(None),
         };
         interpreter.install_natives();
         interpreter
@@ -88,6 +127,10 @@ impl Interpreter {
 
     pub fn permissions(&self) -> &RuntimePermissions {
         &self.permissions
+    }
+
+    pub fn logger(&self) -> &RuntimeLogger {
+        &self.logger
     }
 
     pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {

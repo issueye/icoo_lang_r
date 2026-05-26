@@ -1,5 +1,6 @@
 use crate::error::{IcooError, IcooResult};
 use crate::lexer::token::Span;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimePermissions {
@@ -12,10 +13,13 @@ pub struct RuntimePermissions {
     pub net_listen: PermissionRule,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRule {
     AllowAll,
     DenyAll,
+    AllowPaths(Vec<PathBuf>),
+    AllowEnvKeys(Vec<String>),
+    AllowNetEndpoints(Vec<(String, u16)>),
 }
 
 impl RuntimePermissions {
@@ -75,16 +79,52 @@ impl RuntimePermissions {
         check_permission(self.can_read_fs(), "fs.read", span)
     }
 
+    pub fn check_fs_read_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.fs_read.allows_path(path.as_ref()),
+            "fs.read",
+            format!("path '{}'", path.as_ref().display()),
+            span,
+        )
+    }
+
     pub fn check_fs_write(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_write_fs(), "fs.write", span)
+    }
+
+    pub fn check_fs_write_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.fs_write.allows_path(path.as_ref()),
+            "fs.write",
+            format!("path '{}'", path.as_ref().display()),
+            span,
+        )
     }
 
     pub fn check_fs_list(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_list_fs(), "fs.list", span)
     }
 
+    pub fn check_fs_list_path(&self, path: impl AsRef<Path>, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.fs_list.allows_path(path.as_ref()),
+            "fs.list",
+            format!("path '{}'", path.as_ref().display()),
+            span,
+        )
+    }
+
     pub fn check_env_read(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_read_env(), "env.read", span)
+    }
+
+    pub fn check_env_read_key(&self, key: &str, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.env_read.allows_env_key(key),
+            "env.read",
+            format!("key '{}'", key),
+            span,
+        )
     }
 
     pub fn check_os_info(&self, span: Span) -> IcooResult<()> {
@@ -95,8 +135,26 @@ impl RuntimePermissions {
         check_permission(self.can_connect_net(), "net.connect", span)
     }
 
+    pub fn check_net_connect_endpoint(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.net_connect.allows_net_endpoint(host, port),
+            "net.connect",
+            format!("endpoint '{}'", format_endpoint(host, port)),
+            span,
+        )
+    }
+
     pub fn check_net_listen(&self, span: Span) -> IcooResult<()> {
         check_permission(self.can_listen_net(), "net.listen", span)
+    }
+
+    pub fn check_net_listen_endpoint(&self, host: &str, port: u16, span: Span) -> IcooResult<()> {
+        check_resource_permission(
+            self.net_listen.allows_net_endpoint(host, port),
+            "net.listen",
+            format!("endpoint '{}'", format_endpoint(host, port)),
+            span,
+        )
     }
 }
 
@@ -107,8 +165,62 @@ impl Default for RuntimePermissions {
 }
 
 impl PermissionRule {
-    pub fn allows(self) -> bool {
+    pub fn allow_paths(paths: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
+        Self::AllowPaths(paths.into_iter().map(Into::into).collect())
+    }
+
+    pub fn allow_env_keys(keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::AllowEnvKeys(keys.into_iter().map(Into::into).collect())
+    }
+
+    pub fn allow_net_endpoints(
+        endpoints: impl IntoIterator<Item = (impl Into<String>, u16)>,
+    ) -> Self {
+        Self::AllowNetEndpoints(
+            endpoints
+                .into_iter()
+                .map(|(host, port)| (host.into(), port))
+                .collect(),
+        )
+    }
+
+    pub fn allows(&self) -> bool {
         matches!(self, Self::AllowAll)
+    }
+
+    fn allows_path(&self, path: &Path) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::AllowPaths(allowed_paths) => {
+                let requested = normalize_path(path);
+                !requested.as_os_str().is_empty()
+                    && allowed_paths.iter().any(|allowed| {
+                        let allowed = normalize_path(allowed);
+                        !allowed.as_os_str().is_empty() && requested.starts_with(allowed)
+                    })
+            }
+            Self::DenyAll | Self::AllowEnvKeys(_) | Self::AllowNetEndpoints(_) => false,
+        }
+    }
+
+    fn allows_env_key(&self, key: &str) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::AllowEnvKeys(keys) => keys.iter().any(|allowed| env_keys_equal(allowed, key)),
+            Self::DenyAll | Self::AllowPaths(_) | Self::AllowNetEndpoints(_) => false,
+        }
+    }
+
+    fn allows_net_endpoint(&self, host: &str, port: u16) -> bool {
+        match self {
+            Self::AllowAll => true,
+            Self::AllowNetEndpoints(endpoints) => {
+                endpoints.iter().any(|(allowed_host, allowed_port)| {
+                    *allowed_port == port && allowed_host.eq_ignore_ascii_case(host)
+                })
+            }
+            Self::DenyAll | Self::AllowPaths(_) | Self::AllowEnvKeys(_) => false,
+        }
     }
 }
 
@@ -120,5 +232,55 @@ fn check_permission(allowed: bool, capability: &str, span: Span) -> IcooResult<(
             format!("permission denied: {}", capability),
             Some(span),
         ))
+    }
+}
+
+fn check_resource_permission(
+    allowed: bool,
+    capability: &str,
+    resource: String,
+    span: Span,
+) -> IcooResult<()> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(IcooError::runtime(
+            format!("permission denied: {} {}", capability, resource),
+            Some(span),
+        ))
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+fn env_keys_equal(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
+fn format_endpoint(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
     }
 }

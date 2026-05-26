@@ -988,6 +988,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Os", "args") => Some(TypeInfo::array(TypeInfo::known("String"))),
         ("Os", "exe_path" | "get_env") => Some(TypeInfo::Unknown),
         ("Os", "has_env") => Some(TypeInfo::known("Bool")),
+        ("Path", "join" | "normalize" | "dirname" | "basename" | "extension") => {
+            Some(TypeInfo::known("String"))
+        }
+        ("Path", "is_absolute") => Some(TypeInfo::known("Bool")),
         (
             "NetHttpClient",
             "get" | "get_bytes" | "post" | "post_bytes" | "put" | "put_bytes" | "delete"
@@ -1043,6 +1047,7 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
         ("Buffer", "slice" | "to_bytes") => Some(TypeInfo::known("Bytes")),
         ("Buffer", "clear") => Some(TypeInfo::known("Nil")),
         ("Buffer", "to_hex" | "to_base64") => Some(TypeInfo::known("String")),
+        ("Log", "debug" | "info" | "warn" | "error") => Some(TypeInfo::known("Nil")),
         _ => None,
     }
 }

@@ -5,17 +5,56 @@ use crate::lexer::token::Span;
 use crate::runtime::limits::{
     check_http_body_len, check_http_stream_chunk_len, MAX_HTTP_BODY_BYTES,
 };
-use crate::runtime::permissions::RuntimePermissions;
 use crate::runtime::value::Value;
+use rustls::pki_types::ServerName;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HttpScheme {
+    Http,
+    Https,
+}
+
 struct ParsedHttpUrl {
+    scheme: HttpScheme,
     host: String,
     port: u16,
     path: String,
+}
+
+enum HttpClientStream {
+    Plain(std::net::TcpStream),
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>>),
+}
+
+impl Read for HttpClientStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read(buf),
+            Self::Tls(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for HttpClientStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.write(buf),
+            Self::Tls(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.flush(),
+            Self::Tls(stream) => stream.flush(),
+        }
+    }
 }
 
 struct ParsedHttpResponseHead {
@@ -26,10 +65,36 @@ struct ParsedHttpResponseHead {
 
 pub(crate) type HttpClientHeaders = Vec<(String, String)>;
 
+impl Interpreter {
+    pub(crate) fn http_tls_client_config(
+        &self,
+        span: Span,
+    ) -> IcooResult<Arc<rustls::ClientConfig>> {
+        if let Some(config) = self.http_tls_config.borrow().clone() {
+            return Ok(config);
+        }
+        let roots = match &self.http_tls_roots {
+            Some(roots) => roots.as_ref().clone(),
+            None => native_root_store(span)?,
+        };
+        let config = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        *self.http_tls_config.borrow_mut() = Some(config.clone());
+        Ok(config)
+    }
+}
+
 fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
-    let Some(rest) = url.strip_prefix("http://") else {
+    let (scheme, rest, default_port) = if let Some(rest) = url.strip_prefix("http://") {
+        (HttpScheme::Http, rest, 80)
+    } else if let Some(rest) = url.strip_prefix("https://") {
+        (HttpScheme::Https, rest, 443)
+    } else {
         return Err(IcooError::runtime(
-            "only http:// URLs are supported",
+            "only http:// and https:// URLs are supported",
             Some(span),
         ));
     };
@@ -49,60 +114,166 @@ fn parse_http_url(url: &str, span: Span) -> IcooResult<ParsedHttpUrl> {
             .map_err(|_| IcooError::runtime("URL port must be between 1 and 65535", Some(span)))?;
         (host.to_string(), port)
     } else {
-        (host_port.to_string(), 80)
+        (host_port.to_string(), default_port)
     };
-    Ok(ParsedHttpUrl { host, port, path })
+    Ok(ParsedHttpUrl {
+        scheme,
+        host,
+        port,
+        path,
+    })
 }
 
 fn open_http_client_request(
-    permissions: &RuntimePermissions,
+    runtime: &Interpreter,
     method: &str,
     url: &str,
     body: &[u8],
     content_type: Option<&str>,
     headers: &HttpClientHeaders,
     span: Span,
-) -> IcooResult<std::net::TcpStream> {
+) -> IcooResult<HttpClientStream> {
     let parsed = parse_http_url(url, span)?;
     let custom_headers = http_client_headers_text(headers, span)?;
-    permissions.check_net_connect(span)?;
-    let mut stream =
+    runtime
+        .permissions()
+        .check_net_connect_endpoint(&parsed.host, parsed.port, span)?;
+    let mut stream = open_http_client_stream(runtime, &parsed, span)?;
+    write_http_request(
+        &mut stream,
+        &parsed,
+        method,
+        body,
+        content_type,
+        &custom_headers,
+        span,
+    )?;
+    Ok(stream)
+}
+
+fn open_http_client_stream(
+    runtime: &Interpreter,
+    parsed: &ParsedHttpUrl,
+    span: Span,
+) -> IcooResult<HttpClientStream> {
+    let mut tcp =
         std::net::TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|err| {
             IcooError::runtime(
                 format!("http client connection failed: {}", err),
                 Some(span),
             )
         })?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+    let timeout = Some(Duration::from_secs(5));
+    tcp.set_read_timeout(timeout)
+        .and_then(|_| tcp.set_write_timeout(timeout))
         .map_err(|err| IcooError::runtime(format!("http client failed: {}", err), Some(span)))?;
+    if parsed.scheme == HttpScheme::Http {
+        return Ok(HttpClientStream::Plain(tcp));
+    }
+
+    let config = runtime.http_tls_client_config(span)?;
+    let server_name = ServerName::try_from(parsed.host.clone())
+        .map_err(|_| IcooError::runtime("invalid HTTPS server name", Some(span)))?;
+    let mut connection = rustls::ClientConnection::new(config, server_name).map_err(|err| {
+        IcooError::runtime(
+            format!("https client TLS handshake failed: {}", err),
+            Some(span),
+        )
+    })?;
+    connection.complete_io(&mut tcp).map_err(|err| {
+        IcooError::runtime(
+            format!("https client TLS handshake failed: {}", err),
+            Some(span),
+        )
+    })?;
+    Ok(HttpClientStream::Tls(Box::new(rustls::StreamOwned::new(
+        connection, tcp,
+    ))))
+}
+
+fn native_root_store(span: Span) -> IcooResult<rustls::RootCertStore> {
+    let loaded = rustls_native_certs::load_native_certs();
+    if loaded.certs.is_empty() {
+        let reason = if loaded.errors.is_empty() {
+            "no native certificate roots found".to_string()
+        } else {
+            loaded
+                .errors
+                .iter()
+                .map(|err| err.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        return Err(IcooError::runtime(
+            format!(
+                "https client failed to load native certificate roots: {}",
+                reason
+            ),
+            Some(span),
+        ));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    let (added, _ignored) = roots.add_parsable_certificates(loaded.certs);
+    if added == 0 {
+        return Err(IcooError::runtime(
+            "https client failed to load native certificate roots: no usable native certificate roots found",
+            Some(span),
+        ));
+    }
+    Ok(roots)
+}
+
+fn write_http_request(
+    stream: &mut HttpClientStream,
+    parsed: &ParsedHttpUrl,
+    method: &str,
+    body: &[u8],
+    content_type: Option<&str>,
+    custom_headers: &str,
+    span: Span,
+) -> IcooResult<()> {
+    let host = http_host_header(parsed);
     if http_method_has_request_body(method) {
         let content_type = content_type.unwrap_or("application/octet-stream");
         let head = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: {}\r\n{}\r\n",
             method,
             parsed.path,
-            parsed.host,
+            host,
             body.len(),
             content_type,
             custom_headers,
         );
-        std::io::Write::write_all(&mut stream, head.as_bytes()).map_err(|err| {
+        stream.write_all(head.as_bytes()).map_err(|err| {
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
         })?;
-        std::io::Write::write_all(&mut stream, body).map_err(|err| {
+        stream.write_all(body).map_err(|err| {
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
         })?;
     } else {
         let request = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}\r\n",
-            method, parsed.path, parsed.host, custom_headers
+            method, parsed.path, host, custom_headers
         );
-        std::io::Write::write_all(&mut stream, request.as_bytes()).map_err(|err| {
+        stream.write_all(request.as_bytes()).map_err(|err| {
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
         })?;
     };
-    Ok(stream)
+    stream
+        .flush()
+        .map_err(|err| IcooError::runtime(format!("http client write failed: {}", err), Some(span)))
+}
+
+fn http_host_header(parsed: &ParsedHttpUrl) -> String {
+    let default_port = match parsed.scheme {
+        HttpScheme::Http => 80,
+        HttpScheme::Https => 443,
+    };
+    if parsed.port == default_port {
+        parsed.host.clone()
+    } else {
+        format!("{}:{}", parsed.host, parsed.port)
+    }
 }
 
 fn http_client_headers_text(headers: &HttpClientHeaders, span: Span) -> IcooResult<String> {
@@ -133,7 +304,7 @@ pub(crate) fn http_stream_method_name(method_name: &str) -> &'static str {
 }
 
 pub(crate) fn http_client_request(
-    permissions: &RuntimePermissions,
+    runtime: &Interpreter,
     method: &str,
     url: &str,
     body: &str,
@@ -141,7 +312,7 @@ pub(crate) fn http_client_request(
     span: Span,
 ) -> IcooResult<Value> {
     let mut stream = open_http_client_request(
-        permissions,
+        runtime,
         method,
         url,
         body.as_bytes(),
@@ -159,7 +330,7 @@ pub(crate) fn http_client_request(
 }
 
 pub(crate) fn http_client_request_bytes(
-    permissions: &RuntimePermissions,
+    runtime: &Interpreter,
     method: &str,
     url: &str,
     body: &[u8],
@@ -167,7 +338,7 @@ pub(crate) fn http_client_request_bytes(
     span: Span,
 ) -> IcooResult<Value> {
     let mut stream = open_http_client_request(
-        permissions,
+        runtime,
         method,
         url,
         body,
@@ -195,7 +366,7 @@ impl Interpreter {
         span: Span,
     ) -> IcooResult<Value> {
         let mut stream = open_http_client_request(
-            &self.permissions,
+            self,
             method,
             url,
             body.as_bytes(),
@@ -238,7 +409,7 @@ impl Interpreter {
         span: Span,
     ) -> IcooResult<Value> {
         let mut stream = open_http_client_request(
-            &self.permissions,
+            self,
             method,
             url,
             body,
@@ -294,13 +465,13 @@ impl Interpreter {
 }
 
 fn read_http_response_head(
-    stream: &mut std::net::TcpStream,
+    stream: &mut HttpClientStream,
     span: Span,
 ) -> IcooResult<ParsedHttpResponseHead> {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 4096];
     let body_start = loop {
-        let size = std::io::Read::read(stream, &mut buffer).map_err(|err| {
+        let size = stream.read(&mut buffer).map_err(|err| {
             IcooError::runtime(
                 format!("http client stream read failed: {}", err),
                 Some(span),
@@ -332,16 +503,20 @@ struct ParsedHttpResponse {
     body: Vec<u8>,
 }
 
-fn read_http_response(
-    stream: &mut std::net::TcpStream,
-    span: Span,
-) -> IcooResult<ParsedHttpResponse> {
+fn read_http_response(stream: &mut HttpClientStream, span: Span) -> IcooResult<ParsedHttpResponse> {
     let mut response = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
-        let size = std::io::Read::read(stream, &mut buffer).map_err(|err| {
-            IcooError::runtime(format!("http client read failed: {}", err), Some(span))
-        })?;
+        let size = match stream.read(&mut buffer) {
+            Ok(size) => size,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => {
+                return Err(IcooError::runtime(
+                    format!("http client read failed: {}", err),
+                    Some(span),
+                ))
+            }
+        };
         if size == 0 {
             break;
         }
@@ -500,7 +675,7 @@ fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 fn http_client_stream_chunked<F>(
-    stream: &mut std::net::TcpStream,
+    stream: &mut HttpClientStream,
     mut buffer: Vec<u8>,
     span: Span,
     mut on_chunk: F,
@@ -542,7 +717,7 @@ where
 }
 
 fn http_client_stream_content_length<F>(
-    stream: &mut std::net::TcpStream,
+    stream: &mut HttpClientStream,
     buffer: Vec<u8>,
     content_length: usize,
     span: Span,
@@ -563,7 +738,7 @@ where
     let mut read_buffer = [0_u8; 4096];
     while delivered < content_length {
         let max_read = (content_length - delivered).min(read_buffer.len());
-        let size = std::io::Read::read(stream, &mut read_buffer[..max_read]).map_err(|err| {
+        let size = stream.read(&mut read_buffer[..max_read]).map_err(|err| {
             IcooError::runtime(
                 format!("http client stream read failed: {}", err),
                 Some(span),
@@ -584,7 +759,7 @@ where
 }
 
 fn http_client_stream_until_close<F>(
-    stream: &mut std::net::TcpStream,
+    stream: &mut HttpClientStream,
     buffer: Vec<u8>,
     span: Span,
     mut on_chunk: F,
@@ -600,12 +775,16 @@ where
     }
     let mut read_buffer = [0_u8; 4096];
     loop {
-        let size = std::io::Read::read(stream, &mut read_buffer).map_err(|err| {
-            IcooError::runtime(
-                format!("http client stream read failed: {}", err),
-                Some(span),
-            )
-        })?;
+        let size = match stream.read(&mut read_buffer) {
+            Ok(size) => size,
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => {
+                return Err(IcooError::runtime(
+                    format!("http client stream read failed: {}", err),
+                    Some(span),
+                ))
+            }
+        };
         if size == 0 {
             break;
         }
@@ -617,12 +796,12 @@ where
 }
 
 fn read_more_http_stream_bytes(
-    stream: &mut std::net::TcpStream,
+    stream: &mut HttpClientStream,
     buffer: &mut Vec<u8>,
     span: Span,
 ) -> IcooResult<()> {
     let mut read_buffer = [0_u8; 4096];
-    let size = std::io::Read::read(stream, &mut read_buffer).map_err(|err| {
+    let size = stream.read(&mut read_buffer).map_err(|err| {
         IcooError::runtime(
             format!("http client stream read failed: {}", err),
             Some(span),
@@ -645,4 +824,27 @@ fn read_more_http_stream_bytes(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::logging::RuntimeLogger;
+    use crate::runtime::permissions::RuntimePermissions;
+
+    #[test]
+    fn interpreter_reuses_cached_http_tls_client_config() {
+        let interpreter = Interpreter::with_output_permissions_logger_and_tls_roots(
+            |_| {},
+            RuntimePermissions::allow_all(),
+            RuntimeLogger::default(),
+            Some(Arc::new(rustls::RootCertStore::empty())),
+        );
+        let span = Span::new(1, 1, 0, 1);
+
+        let first = interpreter.http_tls_client_config(span).unwrap();
+        let second = interpreter.http_tls_client_config(span).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
 }

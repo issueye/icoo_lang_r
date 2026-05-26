@@ -14,5 +14,10 @@ path = "src/main.rs"
 [dependencies]
 serde_json = "1"
 serde_yml = "0.0.12"
+rustls = { version = "0.23", default-features = true, features = ["std"] }
+rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 toml = "0.8"
+
+[dev-dependencies]
+rcgen = "0.14"

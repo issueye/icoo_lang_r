@@ -1,3 +1,4 @@
+use icoo_lang_r::lexer::token::Span;
 use icoo_lang_r::{PermissionRule, RuntimePermissions};
 use std::fs;
 use std::io::Write;
@@ -9,6 +10,10 @@ fn run_denied(source: &str) -> String {
     icoo_lang_r::run_source_with_permissions(source, RuntimePermissions::deny_all())
         .unwrap_err()
         .to_string()
+}
+
+fn run_with_permissions(source: &str, permissions: RuntimePermissions) -> Result<(), String> {
+    icoo_lang_r::run_source_with_permissions(source, permissions).map_err(|err| err.to_string())
 }
 
 fn free_port() -> u16 {
@@ -34,6 +39,10 @@ fn send_get_with_retry(port: u16, path: &str) {
         }
     }
     panic!("test server did not accept connections on port {}", port);
+}
+
+fn test_span() -> Span {
+    Span::new(1, 1, 0, 1)
 }
 
 #[test]
@@ -81,6 +90,215 @@ fn individual_rules_drive_individual_capability_queries() {
     assert!(permissions.can_read_os_info());
     assert!(!permissions.can_connect_net());
     assert!(permissions.can_listen_net());
+}
+
+#[test]
+fn allow_list_rules_do_not_grant_coarse_capability_queries() {
+    let permissions = RuntimePermissions {
+        fs_read: PermissionRule::allow_paths(["target/icoo_permissions_matrix/read"]),
+        fs_write: PermissionRule::allow_paths(["target/icoo_permissions_matrix/write"]),
+        fs_list: PermissionRule::allow_paths(["target/icoo_permissions_matrix/list"]),
+        env_read: PermissionRule::allow_env_keys(["ICOO_ALLOWED"]),
+        os_info: PermissionRule::AllowAll,
+        net_connect: PermissionRule::allow_net_endpoints([("example.com", 80)]),
+        net_listen: PermissionRule::allow_net_endpoints([("127.0.0.1", 8080)]),
+    };
+
+    assert!(!permissions.can_read_fs());
+    assert!(!permissions.can_write_fs());
+    assert!(!permissions.can_list_fs());
+    assert!(!permissions.can_read_env());
+    assert!(permissions.can_read_os_info());
+    assert!(!permissions.can_connect_net());
+    assert!(!permissions.can_listen_net());
+}
+
+#[test]
+fn path_allow_lists_allow_matching_roots_and_report_denied_path() {
+    let span = test_span();
+    let mut permissions = RuntimePermissions::deny_all();
+    permissions.fs_read = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+    permissions.fs_write = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+    permissions.fs_list = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+
+    permissions
+        .check_fs_read_path("target/icoo_permissions_matrix/allowed/file.txt", span)
+        .unwrap();
+    permissions
+        .check_fs_write_path("target/icoo_permissions_matrix/allowed/file.txt", span)
+        .unwrap();
+    permissions
+        .check_fs_list_path("target/icoo_permissions_matrix/allowed", span)
+        .unwrap();
+
+    let err = permissions
+        .check_fs_read_path("target/icoo_permissions_matrix/blocked/file.txt", span)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains(
+        "permission denied: fs.read path 'target/icoo_permissions_matrix/blocked/file.txt'"
+    ));
+
+    let escaped_err = permissions
+        .check_fs_write_path(
+            "target/icoo_permissions_matrix/allowed/../blocked/file.txt",
+            span,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(escaped_err.contains(
+        "permission denied: fs.write path 'target/icoo_permissions_matrix/allowed/../blocked/file.txt'"
+    ));
+}
+
+#[test]
+fn env_key_allow_lists_allow_matching_keys_and_report_denied_key() {
+    let span = test_span();
+    let mut permissions = RuntimePermissions::deny_all();
+    permissions.env_read = PermissionRule::allow_env_keys(["ICOO_ALLOWED_KEY"]);
+
+    permissions
+        .check_env_read_key("ICOO_ALLOWED_KEY", span)
+        .unwrap();
+
+    let err = permissions
+        .check_env_read_key("ICOO_BLOCKED_KEY", span)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("permission denied: env.read key 'ICOO_BLOCKED_KEY'"));
+}
+
+#[test]
+fn resource_allow_lists_are_enforced_by_native_modules() {
+    fs::create_dir_all("target/icoo_permissions_matrix/allowed").unwrap();
+    fs::create_dir_all("target/icoo_permissions_matrix/blocked").unwrap();
+    fs::write("target/icoo_permissions_matrix/allowed/read.txt", "allowed").unwrap();
+    fs::write("target/icoo_permissions_matrix/blocked/read.txt", "blocked").unwrap();
+
+    let mut permissions = RuntimePermissions::deny_all();
+    permissions.fs_read = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+    permissions.fs_write = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+    permissions.fs_list = PermissionRule::allow_paths(["target/icoo_permissions_matrix/allowed"]);
+    permissions.env_read = PermissionRule::allow_env_keys(["ICOO_ALLOWED_KEY"]);
+    permissions.os_info = PermissionRule::AllowAll;
+    permissions.net_connect = PermissionRule::allow_net_endpoints([("127.0.0.1", 18080)]);
+    permissions.net_listen = PermissionRule::allow_net_endpoints([("127.0.0.1", 18081)]);
+
+    run_with_permissions(
+        r#"import "std.io.fs" as fs
+import "std.env" as env
+import "std.os" as os
+
+fs.exists("target/icoo_permissions_matrix/allowed/read.txt")
+fs.is_file("target/icoo_permissions_matrix/allowed/read.txt")
+fs.is_dir("target/icoo_permissions_matrix/allowed")
+fs.read_text("target/icoo_permissions_matrix/allowed/read.txt")
+fs.write_text("target/icoo_permissions_matrix/allowed/write.txt", "ok")
+fs.append_text("target/icoo_permissions_matrix/allowed/write.txt", "!")
+fs.list_dir("target/icoo_permissions_matrix/allowed")
+env.has("ICOO_ALLOWED_KEY")
+env.get("ICOO_ALLOWED_KEY")
+os.has_env("ICOO_ALLOWED_KEY")
+os.get_env("ICOO_ALLOWED_KEY")"#,
+        permissions.clone(),
+    )
+    .unwrap();
+
+    let fs_err = run_with_permissions(
+        r#"import "std.io.fs" as fs
+fs.read_text("target/icoo_permissions_matrix/blocked/read.txt")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(fs_err.contains(
+        "permission denied: fs.read path 'target/icoo_permissions_matrix/blocked/read.txt'"
+    ));
+
+    let env_err = run_with_permissions(
+        r#"import "std.env" as env
+env.has("ICOO_BLOCKED_KEY")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(env_err.contains("permission denied: env.read key 'ICOO_BLOCKED_KEY'"));
+
+    let os_env_err = run_with_permissions(
+        r#"import "std.os" as os
+os.get_env("ICOO_BLOCKED_KEY")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(os_env_err.contains("permission denied: env.read key 'ICOO_BLOCKED_KEY'"));
+
+    let client_err = run_with_permissions(
+        r#"import "std.net.http.client" as client
+client.get("http://127.0.0.1:18082/")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(client_err.contains("permission denied: net.connect endpoint '127.0.0.1:18082'"));
+
+    let https_default_port_err = run_with_permissions(
+        r#"import "std.net.http.client" as client
+client.get("https://example.invalid/")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(https_default_port_err
+        .contains("permission denied: net.connect endpoint 'example.invalid:443'"));
+
+    let https_explicit_port_err = run_with_permissions(
+        r#"import "std.net.http.client" as client
+client.get("https://example.invalid:8443/")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(https_explicit_port_err
+        .contains("permission denied: net.connect endpoint 'example.invalid:8443'"));
+
+    let server_err = run_with_permissions(
+        r#"import "std.net.http.server" as server
+server.serve_once("127.0.0.1", 18082, "body")"#,
+        permissions.clone(),
+    )
+    .unwrap_err();
+    assert!(server_err.contains("permission denied: net.listen endpoint '127.0.0.1:18082'"));
+
+    let web_err = run_with_permissions(
+        r#"import "std.web.ino" as ino
+let app = ino.App()
+app.listen_once("127.0.0.1", 18082)"#,
+        permissions,
+    )
+    .unwrap_err();
+    assert!(web_err.contains("permission denied: net.listen endpoint '127.0.0.1:18082'"));
+}
+
+#[test]
+fn net_endpoint_allow_lists_allow_matching_endpoints_and_report_denied_endpoint() {
+    let span = test_span();
+    let mut permissions = RuntimePermissions::deny_all();
+    permissions.net_connect = PermissionRule::allow_net_endpoints([("example.com", 80)]);
+    permissions.net_listen = PermissionRule::allow_net_endpoints([("127.0.0.1", 8080)]);
+
+    permissions
+        .check_net_connect_endpoint("example.com", 80, span)
+        .unwrap();
+    permissions
+        .check_net_listen_endpoint("127.0.0.1", 8080, span)
+        .unwrap();
+
+    let connect_err = permissions
+        .check_net_connect_endpoint("example.com", 443, span)
+        .unwrap_err()
+        .to_string();
+    assert!(connect_err.contains("permission denied: net.connect endpoint 'example.com:443'"));
+
+    let listen_err = permissions
+        .check_net_listen_endpoint("127.0.0.1", 9090, span)
+        .unwrap_err()
+        .to_string();
+    assert!(listen_err.contains("permission denied: net.listen endpoint '127.0.0.1:9090'"));
 }
 
 #[test]
