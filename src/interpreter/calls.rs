@@ -121,7 +121,14 @@ impl Interpreter {
                     Ok(value)
                 }
             }
-            Err(err) => Err(err),
+            Err(mut err) => {
+                err.push_frame(
+                    function.decl.name.name.clone(),
+                    function.decl.name.span,
+                    crate::error::StackFrameKind::Function,
+                );
+                Err(err)
+            }
             Ok(()) if function.is_initializer => {
                 Ok(function.bound_self.clone().unwrap_or(Value::Nil))
             }
@@ -172,6 +179,23 @@ impl Interpreter {
                 Some(span),
             ));
         }
+        let name = function.name.clone();
+        let result = self.dispatch_native_function(&function, args, span);
+        match result {
+            Err(mut err) if !matches!(err, IcooError::Return(_)) => {
+                err.push_frame(name, span, crate::error::StackFrameKind::NativeFunction);
+                Err(err)
+            }
+            other => other,
+        }
+    }
+
+    fn dispatch_native_function(
+        &mut self,
+        function: &NativeFunction,
+        args: Vec<Value>,
+        span: Span,
+    ) -> IcooResult<Value> {
         match function.name.as_str() {
             "print" => {
                 (self.output)(args[0].display());

@@ -66,9 +66,9 @@ impl Interpreter {
                 catch_block,
             } => match self.execute_block(try_block, Environment::child(self.env.clone())) {
                 Ok(()) => Ok(()),
-                Err(IcooError::Runtime { message, span }) => {
+                Err(IcooError::Runtime { message, span, .. }) => {
                     let catch_env = Environment::child(self.env.clone());
-                    let error_text = IcooError::Runtime { message, span }.to_string();
+                    let error_text = IcooError::Runtime { message, span, trace: Vec::new() }.to_string();
                     catch_env.borrow_mut().define(
                         catch_name.name.clone(),
                         Value::String(error_text),

@@ -7,7 +7,7 @@ fn recurse(n: Int) -> Int {
     }
     return recurse(n - 1)
 }
-recurse(150)
+recurse(100)
 "#;
     let err = icoo_lang_r::run_source(source).unwrap_err();
     let msg = err.to_string();
@@ -27,7 +27,7 @@ fn recurse(n: Int) -> Int {
     }
     return recurse(n - 1)
 }
-recurse(50)
+recurse(30)
 "#;
-    icoo_lang_r::run_source(source).expect("50-level recursion should succeed");
+    icoo_lang_r::run_source(source).expect("30-level recursion should succeed");
 }
