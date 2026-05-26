@@ -56,6 +56,7 @@ fn allow_all_enables_every_runtime_capability() {
     assert!(permissions.can_read_os_info());
     assert!(permissions.can_connect_net());
     assert!(permissions.can_listen_net());
+    assert!(permissions.can_exec_process());
 }
 
 #[test]
@@ -69,6 +70,7 @@ fn deny_all_disables_every_runtime_capability() {
     assert!(!permissions.can_read_os_info());
     assert!(!permissions.can_connect_net());
     assert!(!permissions.can_listen_net());
+    assert!(!permissions.can_exec_process());
 }
 
 #[test]
@@ -81,6 +83,7 @@ fn individual_rules_drive_individual_capability_queries() {
         os_info: PermissionRule::AllowAll,
         net_connect: PermissionRule::DenyAll,
         net_listen: PermissionRule::AllowAll,
+        process_exec: PermissionRule::DenyAll,
     };
 
     assert!(permissions.can_read_fs());
@@ -90,6 +93,7 @@ fn individual_rules_drive_individual_capability_queries() {
     assert!(permissions.can_read_os_info());
     assert!(!permissions.can_connect_net());
     assert!(permissions.can_listen_net());
+    assert!(!permissions.can_exec_process());
 }
 
 #[test]
@@ -102,6 +106,7 @@ fn allow_list_rules_do_not_grant_coarse_capability_queries() {
         os_info: PermissionRule::AllowAll,
         net_connect: PermissionRule::allow_net_endpoints([("example.com", 80)]),
         net_listen: PermissionRule::allow_net_endpoints([("127.0.0.1", 8080)]),
+        process_exec: PermissionRule::DenyAll,
     };
 
     assert!(!permissions.can_read_fs());
@@ -111,6 +116,7 @@ fn allow_list_rules_do_not_grant_coarse_capability_queries() {
     assert!(permissions.can_read_os_info());
     assert!(!permissions.can_connect_net());
     assert!(!permissions.can_listen_net());
+    assert!(!permissions.can_exec_process());
 }
 
 #[test]
@@ -272,6 +278,12 @@ app.listen_once("127.0.0.1", 18082)"#,
     )
     .unwrap_err();
     assert!(web_err.contains("permission denied: net.listen endpoint '127.0.0.1:18082'"));
+
+    let process_err = run_denied(
+        r#"import "std.process" as process
+process.exec("echo blocked")"#,
+    );
+    assert!(process_err.contains("permission denied: process.exec"));
 }
 
 #[test]
@@ -564,6 +576,7 @@ app.listen_once("127.0.0.1", {})"#,
         os_info: PermissionRule::AllowAll,
         net_connect: PermissionRule::AllowAll,
         net_listen: PermissionRule::AllowAll,
+        process_exec: PermissionRule::AllowAll,
     };
 
     let handle = thread::spawn(move || {

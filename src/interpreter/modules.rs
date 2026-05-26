@@ -19,6 +19,33 @@ impl Interpreter {
         Ok(())
     }
 
+    pub fn interpret_entry_file(&mut self, path: impl AsRef<Path>) -> IcooResult<()> {
+        let path = canonical_module_path(path.as_ref()).map_err(|message| {
+            IcooError::runtime(format!("entry load error: {}", message), None)
+        })?;
+        let source = std::fs::read_to_string(&path).map_err(|err| {
+            IcooError::runtime(
+                format!("failed to read entry '{}': {}", path.display(), err),
+                None,
+            )
+        })?;
+        let tokens = lexer::lex(&source)?;
+        let program = parser::parse(tokens)?;
+        resolver::resolve(&program)?;
+        typechecker::check(&program)?;
+
+        let previous_dir = self.current_module_dir.clone();
+        self.current_module_dir = path.parent().map(Path::to_path_buf);
+        let execution = (|| {
+            for stmt in &program.statements {
+                self.execute(stmt)?;
+            }
+            Ok(())
+        })();
+        self.current_module_dir = previous_dir;
+        execution
+    }
+
     pub(super) fn load_import_value(&mut self, source: &str, span: Span) -> IcooResult<Value> {
         if let Some(module_name) = native_modules::import_path(source) {
             return Ok(Value::NativeModule(Rc::new(NativeModule {

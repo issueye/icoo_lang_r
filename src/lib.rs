@@ -4,6 +4,7 @@ pub mod interpreter;
 pub mod lexer;
 pub mod native_modules;
 pub mod parser;
+pub mod project;
 pub mod resolver;
 pub mod runtime;
 pub mod typechecker;
@@ -12,6 +13,7 @@ pub mod vm;
 use error::IcooError;
 pub use builder::InterpreterBuilder;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+pub use project::{init_project, resolve_project, run_project, run_project_with_output};
 pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
@@ -204,6 +206,14 @@ where
 pub fn run_file(path: impl AsRef<Path>) -> Result<(), IcooError> {
     let mut interpreter = interpreter::Interpreter::new();
     run_protected(|| interpreter.interpret_file(path))
+}
+
+pub fn run_path(path: impl AsRef<Path>) -> Result<(), IcooError> {
+    let path = path.as_ref();
+    if path.is_dir() || path.file_name().and_then(|name| name.to_str()) == Some("pkg.toml") {
+        return run_project(path);
+    }
+    run_file(path)
 }
 
 pub fn run_file_with_output<F>(path: impl AsRef<Path>, output: F) -> Result<(), IcooError>

@@ -42,6 +42,7 @@ fn native_module_registry_matches_current_standard_library_surface() {
             "std.io.fs",
             "std.os",
             "std.path",
+            "std.process",
             "std.net.http.client",
             "std.net.http.server",
             "std.web.ino",
@@ -135,6 +136,10 @@ fn native_module_method_specs_cover_registry_and_lookup() {
         "std.path", "basename"
     ));
     assert!(icoo_lang_r::native_modules::has_method("std.log", "info"));
+    assert!(icoo_lang_r::native_modules::has_method(
+        "std.process",
+        "exec"
+    ));
     assert!(!icoo_lang_r::native_modules::has_method(
         "std.io.fs",
         "missing"
@@ -181,6 +186,13 @@ path.basename(1)
     let err = run(r#"
 import "std.log" as log
 log.info(1)
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected String for argument 1 but got Int"));
+
+    let err = run(r#"
+import "std.process" as process
+process.exec(1)
 "#)
     .unwrap_err();
     assert!(err.contains("type error: expected String for argument 1 but got Int"));

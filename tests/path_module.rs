@@ -117,6 +117,7 @@ fn std_path_is_pure_and_runs_with_denied_permissions() {
         os_info: PermissionRule::DenyAll,
         net_connect: PermissionRule::DenyAll,
         net_listen: PermissionRule::DenyAll,
+        process_exec: PermissionRule::DenyAll,
     };
 
     icoo_lang_r::run_source_with_permissions(

@@ -10,6 +10,7 @@ pub(crate) mod net_http_client;
 pub(crate) mod net_http_server;
 pub(crate) mod os;
 pub(crate) mod path;
+pub(crate) mod process;
 pub(crate) mod time;
 pub(crate) mod toml;
 pub(crate) mod web_ino;
@@ -56,6 +57,7 @@ pub const SPECS: &[NativeModuleSpec] = &[
     io_fs::SPEC,
     os::SPEC,
     path::SPEC,
+    process::SPEC,
     net_http_client::SPEC,
     net_http_server::SPEC,
     web_ino::SPEC,
@@ -123,6 +125,7 @@ pub(crate) fn call(
         "io.fs" => io_fs::call(runtime, name, args, span),
         "os" => os::call(runtime, name, args, span),
         "path" => path::call(name, args, span),
+        "process" => process::call(runtime, name, args, span),
         "net.http.client" => net_http_client::call(runtime, name, args, span),
         "net.http.server" => net_http_server::call(runtime, name, args, span),
         "web.ino" => web_ino::call(name, args, span),

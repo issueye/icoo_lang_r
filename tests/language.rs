@@ -193,6 +193,29 @@ print(scores.size().to_string())
 }
 
 #[test]
+fn supports_multiline_collection_literals_and_call_arguments() {
+    let output = run(r#"
+let values = [
+    "alpha",
+    "beta",
+]
+let config = {
+    "tool": "bash",
+    "limits": {
+        "max_output_bytes": 4,
+    },
+}
+print(values.at(1))
+print(config.get("limits").get("max_output_bytes").to_string())
+print(values.join(
+    "/",
+))
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["beta", "4", "alpha/beta"]);
+}
+
+#[test]
 fn validates_names() {
     let err = run("const max_count = 1\n").unwrap_err();
     assert!(err.contains("constant name 'max_count'"));

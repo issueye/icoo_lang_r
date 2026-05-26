@@ -36,6 +36,16 @@ cargo run -- run examples/demo.icoo
 cargo run -- examples/demo.icoo
 ```
 
+### 初始化项目
+
+```bash
+cargo run -- init my_app
+cd my_app
+icoo run
+```
+
+`init` 会生成 `pkg.toml` 和 `src/main.icoo`。当运行目录或 `pkg.toml` 时，运行时会读取 `pkg.toml` 的 `run.entry`，加载入口文件并调用 `main()`。
+
 ### 检查脚本
 
 `check` 会执行词法分析、语法分析、名称解析和类型检查，但不会运行脚本：
@@ -60,9 +70,10 @@ cargo test
 ## CLI 用法
 
 ```text
-icoo run <file.icoo>
+icoo init [dir]
+icoo run [file.icoo|project_dir|pkg.toml]
 icoo check <file.icoo>
-icoo <file.icoo>
+icoo <file.icoo|project_dir|pkg.toml>
 icoo --help
 icoo --version
 ```
@@ -235,6 +246,7 @@ print(loop.run_until(task))
 | `std.io` | 输出：`print` |
 | `std.io.fs` | 文本/字节文件读写、追加、存在性检查、目录列表 |
 | `std.os` | OS 名称、平台族、架构、进程 ID、可执行路径、环境变量 |
+| `std.process` | 受权限控制的本地 shell 命令执行：`exec` |
 | `std.net.http.client` | HTTP 请求、字节请求和流式接收 |
 | `std.net.http.server` | 轻量 HTTP server：`serve_once` |
 | `std.web.ino` | Express 风格 Web 路由：`App`、`create` |
@@ -251,6 +263,19 @@ print(data.get("name"))
 
 fs.write_text("target/hello.txt", "hello")
 print(fs.read_text("target/hello.txt"))
+```
+
+本地命令工具示例：
+
+```python
+import "std.process" as process
+
+let result = process.exec("echo icoo", {
+    "timeout_ms": 1000,
+    "max_output_bytes": 4096
+})
+print(result.get("success").to_string())
+print(result.get("stdout"))
 ```
 
 历史全局模块 `math`、`time`、`json`、`env` 仍可用；新代码建议使用 `std.*` 导入形式。
@@ -305,6 +330,7 @@ let permissions = RuntimePermissions {
     os_info: PermissionRule::AllowAll,
     net_connect: PermissionRule::DenyAll,
     net_listen: PermissionRule::DenyAll,
+    process_exec: PermissionRule::DenyAll,
 };
 
 icoo_lang_r::run_source_with_permissions(source, permissions)?;

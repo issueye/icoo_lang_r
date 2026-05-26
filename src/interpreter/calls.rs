@@ -11,6 +11,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 impl Interpreter {
+    pub fn call_global_main(&mut self) -> IcooResult<()> {
+        let span = Span::new(1, 1, 0, 0);
+        let main = self.env.borrow().get("main", span).map_err(|_| {
+            IcooError::runtime("project entry must define fn main()", Some(span))
+        })?;
+        self.call_value(main, Vec::new(), span).map(|_| ())
+    }
+
     pub(super) fn call_value(
         &mut self,
         callee: Value,

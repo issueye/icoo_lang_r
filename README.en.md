@@ -36,6 +36,16 @@ The `run` subcommand can also be omitted:
 cargo run -- examples/demo.icoo
 ```
 
+### Initialize a Project
+
+```bash
+cargo run -- init my_app
+cd my_app
+icoo run
+```
+
+`init` creates `pkg.toml` and `src/main.icoo`. When running a project directory or `pkg.toml`, the runtime reads `run.entry`, loads that entry file, and calls `main()`.
+
 ### Check a Script
 
 `check` runs lexing, parsing, name resolution, and type checking without executing the script:
@@ -60,9 +70,10 @@ cargo test
 ## CLI Usage
 
 ```text
-icoo run <file.icoo>
+icoo init [dir]
+icoo run [file.icoo|project_dir|pkg.toml]
 icoo check <file.icoo>
-icoo <file.icoo>
+icoo <file.icoo|project_dir|pkg.toml>
 icoo --help
 icoo --version
 ```
@@ -235,6 +246,7 @@ The event loop is exposed as an Icoo language abstraction; the underlying runtim
 | `std.io` | Output via `print` |
 | `std.io.fs` | Text/byte file read, write, append, existence checks, and directory listing |
 | `std.os` | OS name, family, architecture, process ID, executable path, and environment variables |
+| `std.process` | Permission-controlled local shell command execution via `exec` |
 | `std.net.http.client` | HTTP requests, byte requests, and streaming receive |
 | `std.net.http.server` | Lightweight HTTP server with `serve_once` |
 | `std.web.ino` | Express-style web routing with `App` and `create` |
@@ -251,6 +263,19 @@ print(data.get("name"))
 
 fs.write_text("target/hello.txt", "hello")
 print(fs.read_text("target/hello.txt"))
+```
+
+Local command tool example:
+
+```python
+import "std.process" as process
+
+let result = process.exec("echo icoo", {
+    "timeout_ms": 1000,
+    "max_output_bytes": 4096
+})
+print(result.get("success").to_string())
+print(result.get("stdout"))
 ```
 
 Legacy global modules `math`, `time`, `json`, and `env` are still available. New code should prefer the `std.*` import form.
@@ -305,6 +330,7 @@ let permissions = RuntimePermissions {
     os_info: PermissionRule::AllowAll,
     net_connect: PermissionRule::DenyAll,
     net_listen: PermissionRule::DenyAll,
+    process_exec: PermissionRule::DenyAll,
 };
 
 icoo_lang_r::run_source_with_permissions(source, permissions)?;

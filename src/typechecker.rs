@@ -992,6 +992,10 @@ fn native_method_return(type_name: &str, method_name: &str) -> Option<TypeInfo> 
             Some(TypeInfo::known("String"))
         }
         ("Path", "is_absolute") => Some(TypeInfo::known("Bool")),
+        ("Process", "exec") => Some(TypeInfo::map(
+            TypeInfo::known("String"),
+            TypeInfo::known("Any"),
+        )),
         (
             "NetHttpClient",
             "get" | "get_bytes" | "post" | "post_bytes" | "put" | "put_bytes" | "delete"

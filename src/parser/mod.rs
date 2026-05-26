@@ -546,12 +546,14 @@ impl Parser {
         loop {
             if self.matches(&TokenKind::LeftParen) {
                 let mut args = Vec::new();
+                self.skip_newlines();
                 if !self.check(&TokenKind::RightParen) {
                     loop {
                         args.push(self.expression()?);
                         if !self.matches(&TokenKind::Comma) {
                             break;
                         }
+                        self.skip_newlines();
                         if self.check(&TokenKind::RightParen) {
                             break;
                         }
@@ -607,12 +609,14 @@ impl Parser {
 
     fn array_literal(&mut self, span: Span) -> IcooResult<Expr> {
         let mut values = Vec::new();
+        self.skip_newlines();
         if !self.check(&TokenKind::RightBracket) {
             loop {
                 values.push(self.expression()?);
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }
+                self.skip_newlines();
                 if self.check(&TokenKind::RightBracket) {
                     break;
                 }
@@ -624,6 +628,7 @@ impl Parser {
 
     fn map_literal(&mut self, span: Span) -> IcooResult<Expr> {
         let mut entries = Vec::new();
+        self.skip_newlines();
         if !self.check(&TokenKind::RightBrace) {
             loop {
                 let key = match self.advance().kind.clone() {
@@ -631,16 +636,19 @@ impl Parser {
                     _ => return Err(self.error_previous("expected string key in map literal")),
                 };
                 self.consume(TokenKind::Colon, "expected ':' after map key")?;
+                self.skip_newlines();
                 let value = self.expression()?;
                 entries.push((key, value));
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }
+                self.skip_newlines();
                 if self.check(&TokenKind::RightBrace) {
                     break;
                 }
             }
         }
+        self.skip_newlines();
         self.consume(TokenKind::RightBrace, "expected '}' after map literal")?;
         Ok(Expr::Map(entries, span))
     }

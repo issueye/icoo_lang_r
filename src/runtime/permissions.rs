@@ -11,6 +11,7 @@ pub struct RuntimePermissions {
     pub os_info: PermissionRule,
     pub net_connect: PermissionRule,
     pub net_listen: PermissionRule,
+    pub process_exec: PermissionRule,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,7 @@ impl RuntimePermissions {
             os_info: PermissionRule::AllowAll,
             net_connect: PermissionRule::AllowAll,
             net_listen: PermissionRule::AllowAll,
+            process_exec: PermissionRule::AllowAll,
         }
     }
 
@@ -44,6 +46,7 @@ impl RuntimePermissions {
             os_info: PermissionRule::DenyAll,
             net_connect: PermissionRule::DenyAll,
             net_listen: PermissionRule::DenyAll,
+            process_exec: PermissionRule::DenyAll,
         }
     }
 
@@ -73,6 +76,10 @@ impl RuntimePermissions {
 
     pub fn can_listen_net(&self) -> bool {
         self.net_listen.allows()
+    }
+
+    pub fn can_exec_process(&self) -> bool {
+        self.process_exec.allows()
     }
 
     pub fn check_fs_read(&self, span: Span) -> IcooResult<()> {
@@ -155,6 +162,10 @@ impl RuntimePermissions {
             format!("endpoint '{}'", format_endpoint(host, port)),
             span,
         )
+    }
+
+    pub fn check_process_exec(&self, span: Span) -> IcooResult<()> {
+        check_permission(self.can_exec_process(), "process.exec", span)
     }
 }
 
