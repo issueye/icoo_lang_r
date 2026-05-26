@@ -102,6 +102,7 @@ impl Interpreter {
             }
             Stmt::While { condition, body } => {
                 while self.eval(condition)?.truthy() {
+                    self.check_timeout(condition.span())?;
                     match self.execute_block(body, Environment::child(self.env.clone())) {
                         Err(IcooError::Break) => break,
                         Err(IcooError::Continue) => continue,

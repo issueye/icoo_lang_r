@@ -1,3 +1,4 @@
+pub mod config;
 pub mod env;
 pub mod http_config;
 pub mod limits;

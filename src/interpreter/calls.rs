@@ -38,6 +38,7 @@ impl Interpreter {
         args: Vec<Value>,
         span: Span,
     ) -> IcooResult<Value> {
+        self.check_timeout(span)?;
         if self.call_depth >= crate::runtime::limits::MAX_CALL_DEPTH {
             return Err(IcooError::runtime(
                 format!("maximum call stack depth exceeded ({})", crate::runtime::limits::MAX_CALL_DEPTH),

@@ -9,6 +9,7 @@ pub mod typechecker;
 pub mod vm;
 
 use error::IcooError;
+pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
@@ -126,6 +127,7 @@ where
             RuntimeLogger::default(),
             None,
             http_config,
+            RuntimeConfig::default(),
         );
     interpreter.interpret(&program)
 }
@@ -147,6 +149,24 @@ where
             RuntimeLogger::default(),
             Some(std::sync::Arc::new(roots)),
             http_config,
+            RuntimeConfig::default(),
+        );
+    interpreter.interpret(&program)
+}
+
+pub fn run_source_with_config(
+    source: &str,
+    config: RuntimeConfig,
+) -> Result<(), IcooError> {
+    let program = parse_and_check(source)?;
+    let mut interpreter =
+        interpreter::Interpreter::with_output_permissions_logger_tls_roots_and_http_config(
+            |line| println!("{}", line),
+            RuntimePermissions::default(),
+            RuntimeLogger::default(),
+            None,
+            RuntimeHttpConfig::default(),
+            config,
         );
     interpreter.interpret(&program)
 }

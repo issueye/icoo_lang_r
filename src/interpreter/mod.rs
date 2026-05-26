@@ -1,4 +1,5 @@
-use crate::error::IcooResult;
+use crate::error::{IcooError, IcooResult};
+use crate::lexer::token::Span;
 use crate::parser::ast::Program;
 use crate::runtime::env::{BindingKind, EnvRef, Environment};
 use crate::runtime::http_config::RuntimeHttpConfig;
@@ -55,6 +56,8 @@ pub struct Interpreter {
     http_tls_roots: Option<Arc<rustls::RootCertStore>>,
     http_tls_config: RefCell<Option<Arc<rustls::ClientConfig>>>,
     call_depth: usize,
+    runtime_config: crate::runtime::config::RuntimeConfig,
+    execution_deadline: Option<std::time::Instant>,
 }
 
 impl Default for Interpreter {
@@ -108,6 +111,7 @@ impl Interpreter {
             logger,
             None,
             RuntimeHttpConfig::default(),
+            crate::runtime::config::RuntimeConfig::default(),
         )
     }
 
@@ -126,6 +130,7 @@ impl Interpreter {
             logger,
             http_tls_roots,
             RuntimeHttpConfig::default(),
+            crate::runtime::config::RuntimeConfig::default(),
         )
     }
 
@@ -135,11 +140,13 @@ impl Interpreter {
         logger: RuntimeLogger,
         http_tls_roots: Option<Arc<rustls::RootCertStore>>,
         http_config: RuntimeHttpConfig,
+        runtime_config: crate::runtime::config::RuntimeConfig,
     ) -> Self
     where
         F: FnMut(String) + 'static,
     {
         let env = Environment::new();
+        let deadline = runtime_config.exec_timeout.map(|t| std::time::Instant::now() + t);
         let mut interpreter = Self {
             env,
             output: Box::new(output),
@@ -154,6 +161,8 @@ impl Interpreter {
             http_tls_roots,
             http_tls_config: RefCell::new(None),
             call_depth: 0,
+            runtime_config,
+            execution_deadline: deadline,
         };
         interpreter.install_natives();
         interpreter
@@ -169,6 +178,19 @@ impl Interpreter {
 
     pub fn http_config(&self) -> &RuntimeHttpConfig {
         &self.http_config
+    }
+
+    pub fn runtime_config(&self) -> &crate::runtime::config::RuntimeConfig {
+        &self.runtime_config
+    }
+
+    fn check_timeout(&self, span: Span) -> IcooResult<()> {
+        if let Some(deadline) = self.execution_deadline {
+            if std::time::Instant::now() > deadline {
+                return Err(IcooError::runtime("execution timed out", Some(span)));
+            }
+        }
+        Ok(())
     }
 
     pub fn interpret(&mut self, program: &Program) -> IcooResult<()> {
