@@ -61,9 +61,12 @@ function runDiagnostics(document) {
   }
 
   const config = vscode.workspace.getConfiguration("icoo");
-  const executable = config.get("executablePath", "icoo");
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "icoo-vscode-"));
-  const tempFile = path.join(tempDir, path.basename(document.fileName || "document.icoo"));
+  const executable = resolveExecutable(config.get("executablePath", "icoo"), document);
+  const tempDir = path.dirname(document.fileName);
+  const tempFile = path.join(
+    tempDir,
+    `.icoo-vscode-check-${process.pid}-${Date.now()}-${path.basename(document.fileName)}`
+  );
 
   try {
     fs.writeFileSync(tempFile, document.getText(), "utf8");
@@ -81,8 +84,27 @@ function runDiagnostics(document) {
     }
     diagnostics.set(document.uri, parseDiagnostics(document, output));
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempFile, { force: true });
   }
+}
+
+function resolveExecutable(configured, document) {
+  if (configured && configured !== "icoo") {
+    return configured;
+  }
+  const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+  if (folder) {
+    const candidate = path.join(
+      folder.uri.fsPath,
+      "target",
+      "debug",
+      process.platform === "win32" ? "icoo.exe" : "icoo"
+    );
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return configured || "icoo";
 }
 
 function parseDiagnostics(document, output) {
