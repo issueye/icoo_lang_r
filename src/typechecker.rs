@@ -399,6 +399,28 @@ impl TypeChecker {
                 self.infer_expr(right)?;
                 Ok(TypeInfo::known("Bool"))
             }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.infer_expr(condition)?;
+                let then_type = self.infer_expr(then_expr)?;
+                let else_type = self.infer_expr(else_expr)?;
+                Ok(common_type(&then_type, &else_type))
+            }
+            Expr::Match { value, arms, .. } => {
+                self.infer_expr(value)?;
+                let mut result_type = TypeInfo::Unknown;
+                for arm in arms {
+                    if let MatchPattern::Expr(pattern) = &arm.pattern {
+                        self.infer_expr(pattern)?;
+                    }
+                    result_type = common_type(&result_type, &self.infer_expr(&arm.value)?);
+                }
+                Ok(result_type)
+            }
             Expr::Assign {
                 target,
                 value,

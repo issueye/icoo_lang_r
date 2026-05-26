@@ -204,6 +204,25 @@ impl Resolver {
                 self.resolve_expr(left)?;
                 self.resolve_expr(right)?;
             }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.resolve_expr(condition)?;
+                self.resolve_expr(then_expr)?;
+                self.resolve_expr(else_expr)?;
+            }
+            Expr::Match { value, arms, .. } => {
+                self.resolve_expr(value)?;
+                for arm in arms {
+                    if let MatchPattern::Expr(pattern) = &arm.pattern {
+                        self.resolve_expr(pattern)?;
+                    }
+                    self.resolve_expr(&arm.value)?;
+                }
+            }
             Expr::Assign { target, value, .. } => {
                 self.resolve_expr(target)?;
                 self.resolve_expr(value)?;

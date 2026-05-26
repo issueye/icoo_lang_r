@@ -1,0 +1,219 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Icoo",
+  "scopeName": "source.icoo",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#declarations" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.icoo",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.icoo",
+          "begin": "f?\"\"\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.icoo" }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.icoo" }
+          },
+          "patterns": [
+            { "include": "#template-expression" },
+            { "include": "#escapes" }
+          ]
+        },
+        {
+          "name": "string.quoted.double.icoo",
+          "begin": "f?\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.icoo" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.icoo" }
+          },
+          "patterns": [
+            { "include": "#template-expression" },
+            { "include": "#escapes" }
+          ]
+        }
+      ]
+    },
+    "template-expression": {
+      "patterns": [
+        {
+          "name": "meta.interpolation.icoo",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.interpolation.begin.icoo" }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.interpolation.end.icoo" }
+          },
+          "patterns": [
+            { "include": "$self" }
+          ]
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.icoo",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.icoo",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.icoo",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.icoo",
+          "match": "\\b(if|elif|else|match|while|try|catch|return|break|continue|yield|await)\\b"
+        },
+        {
+          "name": "keyword.declaration.icoo",
+          "match": "\\b(let|const|final|fn|async|co|class|import|from|export|as)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.icoo",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "variable.language.icoo",
+          "match": "\\b(self|super)\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.icoo",
+          "match": "\\b(?:async\\s+|co\\s+)?fn\\s+([a-z_][a-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.function.icoo" }
+          }
+        },
+        {
+          "name": "meta.class.declaration.icoo",
+          "match": "\\bclass\\s+([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.class.icoo" }
+          }
+        },
+        {
+          "name": "meta.import.icoo",
+          "match": "\\b(import|from)\\b\\s+(\"[^\"]+\")",
+          "captures": {
+            "1": { "name": "keyword.control.import.icoo" },
+            "2": { "name": "string.quoted.double.icoo" }
+          }
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.icoo",
+          "match": "\\b(true|false|nil)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.icoo",
+          "match": "\\b(Any|Array|Bool|Buffer|Bytes|Coroutine|EventLoop|Float|Function|Int|Map|Nil|Number|String|Task|WebInoApp|WebInoResponse)\\b"
+        },
+        {
+          "name": "support.module.icoo",
+          "match": "\\b(std\\.(json|yaml|toml|env|io|io\\.fs|os|process|path|log|math|time|net\\.http\\.client|net\\.http\\.server|web\\.ino)|math|time|json|env|Bytes|Buffer)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.icoo",
+          "match": "\\b(print|len|str|int|float|type|current_loop|sleep)\\s*(?=\\()"
+        },
+        {
+          "name": "entity.name.function.call.icoo",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.icoo" }
+          }
+        },
+        {
+          "name": "variable.other.member.icoo",
+          "match": "\\.\\s*([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.other.member.icoo" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.icoo",
+          "match": "(=|=>|<-|->)"
+        },
+        {
+          "name": "keyword.operator.comparison.icoo",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.icoo",
+          "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.ternary.icoo",
+          "match": "\\?|:"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.icoo",
+          "match": "[,.]"
+        },
+        {
+          "name": "punctuation.bracket.icoo",
+          "match": "[\\[\\]\\{\\}\\(\\)]"
+        }
+      ]
+    }
+  }
+}

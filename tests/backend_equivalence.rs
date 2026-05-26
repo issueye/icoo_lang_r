@@ -129,6 +129,22 @@ print(total.to_string())
 }
 
 #[test]
+fn vm_sync_subset_ternary_and_match_match_ast() {
+    assert_vm_sync_subset_cases(&[Case {
+        name: "vm_ternary_match",
+        source: r#"
+let value = 2
+let label = value == 1 ? "one" : match value {
+    2 => "two",
+    _ => "many",
+}
+print(label)
+"#,
+        expected: &["two"],
+    }]);
+}
+
+#[test]
 fn vm_sync_subset_reports_unsupported_features() {
     let err = run_backend(
         Backend::Vm,

@@ -100,6 +100,15 @@ where
                         continue;
                     }
                 }
+                Instruction::MatchArm(target) => {
+                    let pattern = self.pop_stack("evaluate match pattern")?;
+                    let value = self.peek_stack("evaluate match value")?;
+                    if !value_equal(value, &pattern) {
+                        pc = *target;
+                        continue;
+                    }
+                    self.pop_stack("discard matched match value")?;
+                }
                 Instruction::EnterScope => {
                     self.scopes.push(self.env.clone());
                     self.env = Environment::child(self.env.clone());

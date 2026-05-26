@@ -1,6 +1,8 @@
 use crate::error::{IcooError, IcooResult};
 use crate::lexer;
-use crate::parser::ast::{BindingDecl, Expr, Literal, LogicalOp, Program, Stmt, TemplatePart};
+use crate::parser::ast::{
+    BindingDecl, Expr, Literal, LogicalOp, MatchArm, MatchPattern, Program, Stmt, TemplatePart,
+};
 use crate::resolver;
 use crate::runtime::env::BindingKind;
 use crate::runtime::value::Value;
@@ -171,6 +173,13 @@ impl Compiler {
             Expr::Logical {
                 left, op, right, ..
             } => self.compile_logical(left, *op, right),
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } => self.compile_ternary(condition, then_expr, else_expr),
+            Expr::Match { value, arms, .. } => self.compile_match(value, arms),
             Expr::Assign {
                 target,
                 value,
@@ -259,6 +268,55 @@ impl Compiler {
         Ok(())
     }
 
+    fn compile_ternary(
+        &mut self,
+        condition: &Expr,
+        then_expr: &Expr,
+        else_expr: &Expr,
+    ) -> IcooResult<()> {
+        self.compile_expr(condition)?;
+        let else_jump = self.push_jump_if_false_placeholder();
+        self.compile_expr(then_expr)?;
+        let end_jump = self.push_jump_placeholder();
+        let else_start = self.instructions.len();
+        self.patch_jump(else_jump, else_start);
+        self.compile_expr(else_expr)?;
+        let end = self.instructions.len();
+        self.patch_jump(end_jump, end);
+        Ok(())
+    }
+
+    fn compile_match(&mut self, value: &Expr, arms: &[MatchArm]) -> IcooResult<()> {
+        self.compile_expr(value)?;
+        let mut end_jumps = Vec::new();
+        for arm in arms {
+            match &arm.pattern {
+                MatchPattern::Wildcard(_) => {
+                    self.instructions.push(Instruction::Pop);
+                    self.compile_expr(&arm.value)?;
+                    end_jumps.push(self.push_jump_placeholder());
+                    break;
+                }
+                MatchPattern::Expr(pattern) => {
+                    self.compile_expr(pattern)?;
+                    let next_arm = self.instructions.len();
+                    self.instructions.push(Instruction::MatchArm(usize::MAX));
+                    self.compile_expr(&arm.value)?;
+                    end_jumps.push(self.push_jump_placeholder());
+                    let next = self.instructions.len();
+                    self.patch_jump(next_arm, next);
+                }
+            }
+        }
+        self.instructions.push(Instruction::Pop);
+        self.instructions.push(Instruction::Nil);
+        let end = self.instructions.len();
+        for jump in end_jumps {
+            self.patch_jump(jump, end);
+        }
+        Ok(())
+    }
+
     fn compile_template(&mut self, parts: &[TemplatePart]) -> IcooResult<()> {
         let mut first = true;
         for part in parts {
@@ -302,7 +360,8 @@ impl Compiler {
             Instruction::Jump(current)
             | Instruction::JumpIfFalse(current)
             | Instruction::JumpIfFalseKeep(current)
-            | Instruction::JumpIfTrueKeep(current) => *current = target,
+            | Instruction::JumpIfTrueKeep(current)
+            | Instruction::MatchArm(current) => *current = target,
             _ => unreachable!("jump patch target is not a jump instruction"),
         }
     }

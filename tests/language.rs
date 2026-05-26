@@ -193,6 +193,59 @@ print(scores.size().to_string())
 }
 
 #[test]
+fn supports_ternary_and_match_expressions() {
+    let output = run(r#"
+let age = 20
+let status = age >= 18 ? "adult" : "minor"
+print(status)
+
+let nested = false ? "no" : true ? "yes" : "never"
+print(nested)
+
+let code = 2
+let label = match code {
+    1 => "one",
+    2 => "two",
+    _ => "many",
+}
+print(label)
+
+let missing = match "x" {
+    "a" => 1,
+}
+print(missing.to_string())
+
+print(match status {
+    "minor" => "m",
+    "adult" => "a",
+    _ => "?",
+})
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["adult", "yes", "two", "nil", "a"]);
+}
+
+#[test]
+fn typechecker_checks_ternary_and_match_expression_branches() {
+    let output = run(r#"
+let pick: String = true ? "left" : "right"
+let label: String = match 1 {
+    0 => "zero",
+    _ => "other",
+}
+print(pick + ":" + label)
+"#)
+    .unwrap();
+    assert_eq!(output, vec!["left:other"]);
+
+    let err = run(r#"
+let value: Int = true ? "bad" : 1
+"#)
+    .unwrap_err();
+    assert!(err.contains("type error: expected Int for binding 'value' but got Any"));
+}
+
+#[test]
 fn supports_multiline_collection_literals_and_call_arguments() {
     let output = run(r#"
 let values = [

@@ -368,6 +368,10 @@ cargo test web_ino
 
 Some HTTP/WebIno tests temporarily listen on local loopback ports.
 
+## Editor Support
+
+This repository includes a VS Code syntax extension in `editors/vscode-icoo`. Open that folder and press `F5` to launch an Extension Development Host, or run `vsce package` to build a `.vsix`.
+
 ## Design Documents
 
 See `docs/plans/` for the fuller language design, standard library planning, module-system design, and VM notes.

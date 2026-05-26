@@ -269,6 +269,34 @@ impl Interpreter {
                     _ => self.eval(right),
                 }
             }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                if self.eval(condition)?.truthy() {
+                    self.eval(then_expr)
+                } else {
+                    self.eval(else_expr)
+                }
+            }
+            Expr::Match { value, arms, .. } => {
+                let value = self.eval(value)?;
+                for arm in arms {
+                    let matched = match &arm.pattern {
+                        MatchPattern::Wildcard(_) => true,
+                        MatchPattern::Expr(pattern) => {
+                            let pattern = self.eval(pattern)?;
+                            value_equal(&value, &pattern)
+                        }
+                    };
+                    if matched {
+                        return self.eval(&arm.value);
+                    }
+                }
+                Ok(Value::Nil)
+            }
             Expr::Assign {
                 target,
                 value,

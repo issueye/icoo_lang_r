@@ -380,7 +380,7 @@ impl Parser {
     }
 
     fn assignment(&mut self) -> IcooResult<Expr> {
-        let expr = self.logic_or()?;
+        let expr = self.ternary()?;
         if self.matches(&TokenKind::Equal) {
             let span = self.previous().span;
             let value = self.assignment()?;
@@ -392,6 +392,24 @@ impl Parser {
                 }),
                 _ => Err(IcooError::parse("invalid assignment target", span)),
             }
+        } else {
+            Ok(expr)
+        }
+    }
+
+    fn ternary(&mut self) -> IcooResult<Expr> {
+        let expr = self.logic_or()?;
+        if self.matches(&TokenKind::Question) {
+            let span = self.previous().span;
+            let then_expr = self.expression()?;
+            self.consume(TokenKind::Colon, "expected ':' in ternary expression")?;
+            let else_expr = self.ternary()?;
+            Ok(Expr::Ternary {
+                condition: Box::new(expr),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+                span,
+            })
         } else {
             Ok(expr)
         }
@@ -602,10 +620,43 @@ impl Parser {
                 self.consume(TokenKind::RightParen, "expected ')' after expression")?;
                 Ok(expr)
             }
+            TokenKind::Match => self.match_expr(token.span),
             TokenKind::LeftBracket => self.array_literal(token.span),
             TokenKind::LeftBrace => self.map_literal(token.span),
             _ => Err(IcooError::parse("expected expression", token.span)),
         }
+    }
+
+    fn match_expr(&mut self, span: Span) -> IcooResult<Expr> {
+        let value = self.expression()?;
+        self.consume(TokenKind::LeftBrace, "expected '{' after match value")?;
+        let mut arms = Vec::new();
+        self.skip_newlines();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            let pattern = if self.matches_ident("_") {
+                MatchPattern::Wildcard(self.previous().span)
+            } else {
+                MatchPattern::Expr(self.expression()?)
+            };
+            self.consume(TokenKind::FatArrow, "expected '=>' after match pattern")?;
+            self.skip_newlines();
+            let arm_value = self.expression()?;
+            arms.push(MatchArm {
+                pattern,
+                value: arm_value,
+            });
+            self.skip_newlines();
+            if !self.matches(&TokenKind::Comma) {
+                break;
+            }
+            self.skip_newlines();
+        }
+        self.consume(TokenKind::RightBrace, "expected '}' after match arms")?;
+        Ok(Expr::Match {
+            value: Box::new(value),
+            arms,
+            span,
+        })
     }
 
     fn array_literal(&mut self, span: Span) -> IcooResult<Expr> {
@@ -779,6 +830,16 @@ impl Parser {
             }
         }
         false
+    }
+
+    fn matches_ident(&mut self, expected: &str) -> bool {
+        match &self.peek().kind {
+            TokenKind::Ident(name) if name == expected => {
+                self.advance();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn check(&self, kind: &TokenKind) -> bool {

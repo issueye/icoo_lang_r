@@ -140,6 +140,18 @@ impl TypeRef {
 }
 
 #[derive(Debug, Clone)]
+pub enum MatchPattern {
+    Wildcard(Span),
+    Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Literal, Span),
     Variable(Identifier),
@@ -163,6 +175,17 @@ pub enum Expr {
         left: Box<Expr>,
         op: LogicalOp,
         right: Box<Expr>,
+        span: Span,
+    },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
+    Match {
+        value: Box<Expr>,
+        arms: Vec<MatchArm>,
         span: Span,
     },
     Assign {
@@ -198,6 +221,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Logical { span, .. }
+            | Expr::Ternary { span, .. }
+            | Expr::Match { span, .. }
             | Expr::Assign { span, .. }
             | Expr::Get { span, .. }
             | Expr::Call { span, .. }

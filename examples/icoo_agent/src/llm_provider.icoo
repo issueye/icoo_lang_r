@@ -13,25 +13,20 @@ export fn real_next_assistant_message(turn: Int, messages: Array<Map<String, Any
     if model == nil {
         model = "gpt-5.5"
     }
+    let api_key_text = api_key.to_string()
+    let base_url_text = base_url.to_string()
+    let model_text = model.to_string()
 
     let prompt = build_turn_prompt(turn, messages.len())
     let body = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are the provider inside a Pi-style coding agent harness. Return only valid JSON."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "model": model_text,
+        "instructions": "You are the provider inside a Pi-style coding agent harness. Return only valid JSON.",
+        "input": prompt,
         "temperature": 0,
-        "max_tokens": 500
+        "max_output_tokens": 500
     }
-    let response = send_chat_request(base_url + "/v1/chat/completions", json.stringify(body), {
-        "Authorization": "Bearer " + api_key,
+    let response = send_chat_request(responses_url(base_url_text), json.stringify(body), {
+        "Authorization": "Bearer " + api_key_text,
         "Content-Type": "application/json"
     })
 
@@ -51,8 +46,15 @@ export fn real_next_assistant_message(turn: Int, messages: Array<Map<String, Any
     }
 
     let data = json.parse(response.get("body"))
-    let content = data.get("choices").at(0).get("message").get("content")
+    let content = data.get("output").at(0).get("content").at(0).get("text")
     return normalize_assistant_message(json.parse(content))
+}
+
+fn responses_url(base_url: String) -> String {
+    if base_url.contains("/v1") {
+        return base_url + "/responses"
+    }
+    return base_url + "/v1/responses"
 }
 
 fn send_chat_request(url: String, body: String, headers: Map<String, String>) -> Map<String, Any> {

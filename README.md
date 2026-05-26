@@ -368,6 +368,10 @@ cargo test web_ino
 
 部分 HTTP/WebIno 测试会在本机回环地址上临时监听端口。
 
+## 编辑器支持
+
+仓库包含一个 VS Code 语法插件，位于 `editors/vscode-icoo`。打开该目录后可按 `F5` 启动 Extension Development Host 调试，也可以使用 `vsce package` 打包为 `.vsix`。
+
 ## 设计文档
 
 更完整的语言设计、标准库规划、模块系统和 VM 设计见 `docs/plans/`。

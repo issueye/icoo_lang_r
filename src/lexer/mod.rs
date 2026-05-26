@@ -136,6 +136,10 @@ impl<'a> Lexer<'a> {
                     self.add(TokenKind::Colon, line_no, col, i, i + 1);
                     i += 1;
                 }
+                '?' => {
+                    self.add(TokenKind::Question, line_no, col, i, i + 1);
+                    i += 1;
+                }
                 '+' => {
                     self.add(TokenKind::Plus, line_no, col, i, i + 1);
                     i += 1;
@@ -182,6 +186,10 @@ impl<'a> Lexer<'a> {
                 }
                 '=' if Self::matches(&chars, i + 1, '=') => {
                     self.add(TokenKind::EqualEqual, line_no, col, i, i + 2);
+                    i += 2;
+                }
+                '=' if Self::matches(&chars, i + 1, '>') => {
+                    self.add(TokenKind::FatArrow, line_no, col, i, i + 2);
                     i += 2;
                 }
                 '=' => {
@@ -400,6 +408,7 @@ fn keyword_or_ident(text: String) -> TokenKind {
         "if" => TokenKind::If,
         "elif" => TokenKind::Elif,
         "else" => TokenKind::Else,
+        "match" => TokenKind::Match,
         "while" => TokenKind::While,
         "return" => TokenKind::Return,
         "break" => TokenKind::Break,

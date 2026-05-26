@@ -1,0 +1,82 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2}) -> ${3:Nil} {",
+      "    ${0}",
+      "}"
+    ],
+    "description": "Define an Icoo function"
+  },
+  "Async Function": {
+    "prefix": "async fn",
+    "body": [
+      "async fn ${1:name}(${2}) -> ${3:Nil} {",
+      "    ${0}",
+      "}"
+    ],
+    "description": "Define an async Icoo function"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "    let ${2:field}: ${3:String}",
+      "",
+      "    fn init(self, ${2}: ${3}) {",
+      "        self.${2} = ${2}",
+      "    }",
+      "}"
+    ],
+    "description": "Define an Icoo class"
+  },
+  "If": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "    ${0}",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "While": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "    ${0}",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value} {",
+      "    ${2:pattern} => ${3:result},",
+      "    _ => ${0:fallback},",
+      "}"
+    ],
+    "description": "Match expression"
+  },
+  "Try Catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "    ${1}",
+      "} catch ${2:err} {",
+      "    ${0}",
+      "}"
+    ],
+    "description": "Try/catch block"
+  },
+  "Import Module": {
+    "prefix": "import",
+    "body": "import \"${1:std.json}\" as ${2:json}",
+    "description": "Import a module with an alias"
+  },
+  "Print": {
+    "prefix": "print",
+    "body": "print(${1:value})",
+    "description": "Print a value"
+  }
+}

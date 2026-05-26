@@ -43,6 +43,7 @@ pub enum TokenKind {
     If,
     Elif,
     Else,
+    Match,
     While,
     Return,
     Break,
@@ -71,6 +72,7 @@ pub enum TokenKind {
     Comma,
     Dot,
     Colon,
+    Question,
     Plus,
     Minus,
     Star,
@@ -84,6 +86,7 @@ pub enum TokenKind {
     Greater,
     GreaterEqual,
     Arrow,
+    FatArrow,
     LeftArrow,
 
     Newline,

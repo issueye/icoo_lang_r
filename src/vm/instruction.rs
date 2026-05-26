@@ -20,6 +20,7 @@ pub enum Instruction {
     JumpIfFalse(usize),
     JumpIfFalseKeep(usize),
     JumpIfTrueKeep(usize),
+    MatchArm(usize),
     EnterScope,
     ExitScope,
     Print,

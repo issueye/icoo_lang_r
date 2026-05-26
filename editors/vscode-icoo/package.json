@@ -1,0 +1,47 @@
+{
+  "name": "icoo-language",
+  "displayName": "Icoo Language",
+  "description": "Syntax highlighting and editing support for Icoo .icoo files.",
+  "version": "0.1.0",
+  "publisher": "icoo-lang",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "icoo",
+    "language",
+    "syntax"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "icoo",
+        "aliases": [
+          "Icoo",
+          "icoo"
+        ],
+        "extensions": [
+          ".icoo"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "icoo",
+        "scopeName": "source.icoo",
+        "path": "./syntaxes/icoo.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "icoo",
+        "path": "./snippets/icoo.json"
+      }
+    ]
+  }
+}
