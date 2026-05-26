@@ -21,6 +21,10 @@ export fn load_config() {
             "max_turns": 6,
             "compact_after_messages": 7
         },
+        "tools": {
+            "allow_bash": true,
+            "workspace_root": "."
+        },
         "session": {
             "path": "target/icoo_agent_session.json"
         }
@@ -32,5 +36,21 @@ export fn load_config() {
 fn apply_env_overrides(config) {
     if env.has("ICOO_AGENT_API_KEY") {
         config.get("agent").set("mode", "real")
+    }
+    ensure_tools_config(config)
+    if env.has("ICOO_AGENT_ALLOW_BASH") {
+        config.get("tools").set("allow_bash", env.get("ICOO_AGENT_ALLOW_BASH") != "false")
+    }
+}
+
+fn ensure_tools_config(config) {
+    if config.get("tools") == nil {
+        config.set("tools", {})
+    }
+    if config.get("tools").get("allow_bash") == nil {
+        config.get("tools").set("allow_bash", true)
+    }
+    if config.get("tools").get("workspace_root") == nil {
+        config.get("tools").set("workspace_root", ".")
     }
 }

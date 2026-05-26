@@ -6,5 +6,9 @@ mode = "mock"
 max_turns = 6
 compact_after_messages = 7
 
+[tools]
+allow_bash = true
+workspace_root = "."
+
 [session]
 path = "target/icoo_agent_session.json"

@@ -1,24 +1,58 @@
 import "std.io.fs" as fs
+import "std.path" as path
 import "std.process" as process
 
 export fn tool_specs() -> Array<Map<String, Any>> {
     return [
         {
             "name": "bash",
-            "description": "Run a local shell command and return stdout, stderr, and exit status."
+            "description": "Run a local shell command and return stdout, stderr, and exit status.",
+            "args": {
+                "command": "String"
+            },
+            "enabled": true,
+            "dangerous": true,
+            "timeout_ms": 3000,
+            "retry_safe": false
         },
         {
             "name": "write_file",
-            "description": "Write UTF-8 text to a local file."
+            "description": "Write UTF-8 text to a local file.",
+            "args": {
+                "path": "String",
+                "content": "String"
+            },
+            "enabled": true,
+            "dangerous": true,
+            "timeout_ms": 3000,
+            "retry_safe": false
         },
         {
             "name": "read_file",
-            "description": "Read UTF-8 text from a local file."
+            "description": "Read UTF-8 text from a local file.",
+            "args": {
+                "path": "String"
+            },
+            "enabled": true,
+            "dangerous": false,
+            "timeout_ms": 3000,
+            "retry_safe": true
         }
     ]
 }
 
-export fn execute_tool(call: Map<String, Any>) -> Map<String, Any> {
+export fn tool_spec_summary(specs: Array<Map<String, Any>>) -> String {
+    let lines = []
+    let index = 0
+    while index < specs.len() {
+        let spec = specs.at(index)
+        lines.push("- " + spec.get("name") + ": " + spec.get("description") + " args=" + spec.get("args").to_string())
+        index = index + 1
+    }
+    return lines.join("\n")
+}
+
+export fn execute_tool(config: Map<String, Any>, call: Map<String, Any>) -> Map<String, Any> {
     let name = call.get("name")
     let args = call.get("args")
 
@@ -30,6 +64,11 @@ export fn execute_tool(call: Map<String, Any>) -> Map<String, Any> {
     }
     if args == nil {
         args = {}
+    }
+
+    let preflight = preflight_tool(config, name.to_string(), args)
+    if preflight.get("ok") == false {
+        return preflight
     }
 
     if name == "bash" {
@@ -46,6 +85,49 @@ export fn execute_tool(call: Map<String, Any>) -> Map<String, Any> {
         "ok": false,
         "content": "unknown tool: " + name.to_string()
     }
+}
+
+fn preflight_tool(config: Map<String, Any>, name: String, args: Map<String, Any>) -> Map<String, Any> {
+    if name == "bash" and config.get("tools").get("allow_bash") == false {
+        return blocked("bash tool is disabled by config")
+    }
+    if name == "write_file" or name == "read_file" {
+        let requested = args.get("path")
+        if requested == nil {
+            requested = args.get("file_path")
+        }
+        if requested == nil {
+            requested = args.get("filename")
+        }
+        if requested != nil and not path_allowed(config, requested.to_string()) {
+            return blocked("path is outside workspace_root: " + requested.to_string())
+        }
+    }
+    return {
+        "ok": true,
+        "content": "allowed"
+    }
+}
+
+fn blocked(reason: String) -> Map<String, Any> {
+    return {
+        "ok": false,
+        "blocked": true,
+        "content": reason
+    }
+}
+
+fn path_allowed(config: Map<String, Any>, requested: String) -> Bool {
+    let root = config.get("tools").get("workspace_root")
+    if root == nil {
+        root = "."
+    }
+    let normalized_root = path.normalize(root.to_string())
+    let normalized_path = path.normalize(requested)
+    if normalized_root == "." {
+        return not path.is_absolute(normalized_path) and normalized_path != ".." and normalized_path != "../" and normalized_path != "..\\"
+    }
+    return normalized_path == normalized_root or not path.is_absolute(normalized_path)
 }
 
 fn run_bash(args: Map<String, Any>) -> Map<String, Any> {

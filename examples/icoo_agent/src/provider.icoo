@@ -1,5 +1,5 @@
-export fn build_system_prompt() -> String {
-    return "You are an Icoo coding agent. Plan, call tools, read tool results, then summarize."
+export fn build_system_prompt(tool_summary: String, resource_summary: String) -> String {
+    return "You are an Icoo coding agent. Plan, call tools, read tool results, then summarize.\n\nTools:\n" + tool_summary + "\n\nResources:\n" + resource_summary
 }
 
 export fn next_assistant_message(turn: Int) -> Map<String, Any> {

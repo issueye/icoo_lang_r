@@ -2,8 +2,9 @@ from "./compaction.icoo" import maybe_compact
 from "./config.icoo" import load_config
 from "./llm_provider.icoo" import real_next_assistant_message
 from "./provider.icoo" import build_system_prompt, next_assistant_message
-from "./session.icoo" import append_message, message, messages, new_session, save_session, tool_message
-from "./tools.icoo" import execute_tool, tool_specs
+from "./resources.icoo" import discover_resources, resource_summary
+from "./session.icoo" import append_message, append_tool_result, message, messages, new_session, record_event, save_session, set_resources, tool_message
+from "./tools.icoo" import execute_tool, tool_spec_summary, tool_specs
 
 fn print_message(item: Map<String, Any>) {
     let role = item.get("role")
@@ -14,11 +15,26 @@ fn print_message(item: Map<String, Any>) {
     }
 }
 
-fn execute_tool_calls(session: Map<String, Any>, calls: Array<Map<String, Any>>) {
+fn execute_tool_calls(config: Map<String, Any>, session: Map<String, Any>, calls: Array<Map<String, Any>>) {
     let index = 0
     while index < calls.len() {
         let call = calls.at(index)
-        let result = execute_tool(call)
+        record_event(session, "tool_start", {
+            "name": call.get("name"),
+            "index": index
+        })
+        let result = execute_tool(config, call)
+        append_tool_result(session, call, result)
+        if result.get("blocked") == true {
+            record_event(session, "tool_blocked", {
+                "name": call.get("name"),
+                "reason": result.get("content")
+            })
+        }
+        record_event(session, "tool_end", {
+            "name": call.get("name"),
+            "ok": result.get("ok")
+        })
         let item = tool_message(call.get("name"), result)
         append_message(session, item)
         print_message(item)
@@ -37,34 +53,59 @@ export fn run_agent() {
     let config = load_config()
     let session = new_session(config)
     let tools = tool_specs()
+    let resources = discover_resources()
+    set_resources(session, resources)
 
-    append_message(session, message("system", build_system_prompt()))
+    record_event(session, "agent_start", {
+        "mode": config.get("agent").get("mode")
+    })
+    append_message(session, message("system", build_system_prompt(tool_spec_summary(tools), resource_summary(resources))))
     append_message(session, message("user", "Create a short note proving the Icoo agent loop works."))
 
     print("Icoo Agent")
     print("tools: " + tools.len().to_string())
+    print("resources: " + resources.len().to_string())
     print("mode: " + config.get("agent").get("mode"))
 
     let turn = 0
     let max_turns = config.get("runtime").get("max_turns")
     while turn < max_turns {
+        record_event(session, "turn_start", {
+            "turn": turn,
+            "message_count": messages(session).len()
+        })
         let assistant = next_message(config, session, turn)
         append_message(session, assistant)
         print_message(assistant)
 
         let calls = assistant.get("tool_calls")
         if calls.len() == 0 {
+            record_event(session, "turn_end", {
+                "turn": turn,
+                "tool_calls": 0
+            })
             break
         }
 
-        execute_tool_calls(session, calls)
+        execute_tool_calls(config, session, calls)
         if maybe_compact(config, session) {
+            record_event(session, "compaction", {
+                "message_count": messages(session).len()
+            })
             print("[compact] " + session.get("summaries").at(0).get("content"))
         }
+        record_event(session, "turn_end", {
+            "turn": turn,
+            "tool_calls": calls.len()
+        })
         turn = turn + 1
     }
 
+    record_event(session, "agent_end", {
+        "messages": messages(session).len()
+    })
     save_session(config, session)
     print("messages: " + messages(session).len().to_string())
+    print("events: " + session.get("events").len().to_string())
     print("session: " + config.get("session").get("path"))
 }

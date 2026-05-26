@@ -367,10 +367,12 @@ fn examples_icoo_agent_project_runs() {
     let text = stdout(&output);
     assert!(text.contains("Icoo Agent"));
     assert!(text.contains("mode: mock"));
+    assert!(text.contains("resources: "));
     assert!(text.contains("[tool:bash] icoo-agent tool execution"));
     assert!(text.contains("[tool:write_file] wrote target/icoo_agent_note.txt"));
     assert!(text.contains("[tool:read_file] icoo_agent completed a Pi-style tool loop"));
     assert!(text.contains("[compact] Context compacted after 8 messages"));
+    assert!(text.contains("events: "));
     assert!(text.contains("session: target/icoo_agent_session.json"));
 }
 

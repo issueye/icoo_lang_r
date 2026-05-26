@@ -4,10 +4,14 @@ import "std.path" as path
 
 export fn new_session(config: Map<String, Any>) -> Map<String, Any> {
     return {
+        "id": config.get("agent").get("name") + "-session",
         "agent": config.get("agent").get("name"),
         "mode": config.get("agent").get("mode"),
         "messages": [],
-        "summaries": []
+        "summaries": [],
+        "resources": [],
+        "tool_results": [],
+        "events": []
     }
 }
 
@@ -29,10 +33,38 @@ export fn tool_message(name: String, result: Map<String, Any>) -> Map<String, An
 
 export fn append_message(session: Map<String, Any>, item: Map<String, Any>) {
     session.get("messages").push(item)
+    record_event(session, "message_append", {
+        "role": item.get("role"),
+        "message_count": session.get("messages").len()
+    })
 }
 
 export fn messages(session: Map<String, Any>) -> Array<Map<String, Any>> {
     return session.get("messages")
+}
+
+export fn set_resources(session: Map<String, Any>, resources: Array<Map<String, Any>>) {
+    session.set("resources", resources)
+    record_event(session, "resources_loaded", {
+        "count": resources.len()
+    })
+}
+
+export fn append_tool_result(session: Map<String, Any>, call: Map<String, Any>, result: Map<String, Any>) {
+    session.get("tool_results").push({
+        "name": call.get("name"),
+        "ok": result.get("ok"),
+        "content": result.get("content"),
+        "exit_code": result.get("exit_code")
+    })
+}
+
+export fn record_event(session: Map<String, Any>, kind: String, data: Map<String, Any>) {
+    session.get("events").push({
+        "type": kind,
+        "index": session.get("events").len(),
+        "data": data
+    })
 }
 
 export fn save_session(config: Map<String, Any>, session: Map<String, Any>) {

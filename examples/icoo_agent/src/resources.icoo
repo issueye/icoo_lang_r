@@ -1,0 +1,59 @@
+import "std.io.fs" as fs
+import "std.path" as path
+
+export fn discover_resources() -> Array<Map<String, Any>> {
+    let resources = []
+    add_file(resources, "README.md", "repo_readme")
+    add_file(resources, "AGENTS.md", "agent_instructions")
+    add_file(resources, "examples/icoo_agent/README.md", "example_readme")
+    add_markdown_dir(resources, ".pi/skills", "skill")
+    add_markdown_dir(resources, ".pi/prompts", "prompt")
+    return resources
+}
+
+export fn resource_summary(resources: Array<Map<String, Any>>) -> String {
+    if resources.len() == 0 {
+        return "No local resources were discovered."
+    }
+
+    let lines = []
+    let index = 0
+    while index < resources.len() {
+        let item = resources.at(index)
+        lines.push("- " + item.get("kind") + ": " + item.get("path") + " :: " + item.get("preview"))
+        index = index + 1
+    }
+    return lines.join("\n")
+}
+
+fn add_markdown_dir(resources: Array<Map<String, Any>>, dir: String, kind: String) {
+    if not fs.exists(dir) {
+        return
+    }
+    let names = fs.list_dir(dir)
+    let index = 0
+    while index < names.len() {
+        let name = names.at(index)
+        if name.ends_with(".md") {
+            add_file(resources, path.join(dir, name), kind)
+        }
+        index = index + 1
+    }
+}
+
+fn add_file(resources: Array<Map<String, Any>>, file_path: String, kind: String) {
+    if not fs.exists(file_path) {
+        return
+    }
+    let content = fs.read_text(file_path)
+    resources.push({
+        "kind": kind,
+        "path": file_path,
+        "title": path.basename(file_path),
+        "preview": snippet(content, 180)
+    })
+}
+
+fn snippet(content: String, limit: Int) -> String {
+    return content
+}
