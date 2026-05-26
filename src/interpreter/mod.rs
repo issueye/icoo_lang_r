@@ -54,6 +54,7 @@ pub struct Interpreter {
     http_config: RuntimeHttpConfig,
     http_tls_roots: Option<Arc<rustls::RootCertStore>>,
     http_tls_config: RefCell<Option<Arc<rustls::ClientConfig>>>,
+    call_depth: usize,
 }
 
 impl Default for Interpreter {
@@ -152,6 +153,7 @@ impl Interpreter {
             http_config,
             http_tls_roots,
             http_tls_config: RefCell::new(None),
+            call_depth: 0,
         };
         interpreter.install_natives();
         interpreter
