@@ -1,6 +1,8 @@
 use crate::error::{IcooError, IcooResult};
 use crate::interpreter::Interpreter;
+use crate::runtime::http_config::RuntimeHttpConfig;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const DEFAULT_PKG_TOML: &str = r#"[package]
 name = "icoo-app"
@@ -8,6 +10,9 @@ version = "0.1.0"
 
 [run]
 entry = "src/main.icoo"
+
+[http]
+timeout_ms = 5000
 "#;
 
 const DEFAULT_MAIN: &str = r#"fn main() {
@@ -19,6 +24,7 @@ const DEFAULT_MAIN: &str = r#"fn main() {
 pub struct ProjectConfig {
     pub root: PathBuf,
     pub entry: PathBuf,
+    pub http_config: RuntimeHttpConfig,
 }
 
 pub fn init_project(path: impl AsRef<Path>) -> IcooResult<()> {
@@ -105,7 +111,11 @@ pub fn resolve_project(path: impl AsRef<Path>) -> IcooResult<ProjectConfig> {
     let config = parse_project_config(&source, &pkg_path)?;
     let entry = root.join(config.entry);
 
-    Ok(ProjectConfig { root, entry })
+    Ok(ProjectConfig {
+        root,
+        entry,
+        http_config: config.http_config,
+    })
 }
 
 pub fn run_project(path: impl AsRef<Path>) -> IcooResult<()> {
@@ -117,7 +127,14 @@ where
     F: FnMut(String) + 'static,
 {
     let config = resolve_project(path)?;
-    let mut interpreter = Interpreter::with_output(output);
+    let mut interpreter = Interpreter::with_output_permissions_logger_tls_roots_and_http_config(
+        output,
+        crate::runtime::permissions::RuntimePermissions::default(),
+        crate::runtime::logging::RuntimeLogger::default(),
+        None,
+        config.http_config,
+        crate::runtime::config::RuntimeConfig::default(),
+    );
     interpreter.interpret_entry_file(config.entry)?;
     interpreter.call_global_main()
 }
@@ -144,12 +161,58 @@ fn parse_project_config(source: &str, path: &Path) -> IcooResult<ProjectConfigTo
             None,
         ));
     }
+    let http_config = parse_http_config(&value, path)?;
     Ok(ProjectConfigToml {
         entry: PathBuf::from(entry),
+        http_config,
     })
+}
+
+fn parse_http_config(value: &toml::Value, path: &Path) -> IcooResult<RuntimeHttpConfig> {
+    let mut config = RuntimeHttpConfig::default();
+    let Some(http) = value.get("http") else {
+        return Ok(config);
+    };
+    let Some(timeout) = http.get("timeout_ms") else {
+        return Ok(config);
+    };
+    let Some(timeout) = timeout.as_integer() else {
+        return Err(IcooError::runtime(
+            format!(
+                "project config '{}' has non-integer http.timeout_ms",
+                path.display()
+            ),
+            None,
+        ));
+    };
+    if timeout <= 0 {
+        return Err(IcooError::runtime(
+            format!(
+                "project config '{}' has non-positive http.timeout_ms",
+                path.display()
+            ),
+            None,
+        ));
+    }
+    let timeout = u64::try_from(timeout).map_err(|_| {
+        IcooError::runtime(
+            format!(
+                "project config '{}' has invalid http.timeout_ms",
+                path.display()
+            ),
+            None,
+        )
+    })?;
+    config = config.with_timeouts(
+        Duration::from_millis(timeout),
+        Duration::from_millis(timeout),
+        Duration::from_millis(timeout),
+    );
+    Ok(config)
 }
 
 #[derive(Debug)]
 struct ProjectConfigToml {
     entry: PathBuf,
+    http_config: RuntimeHttpConfig,
 }

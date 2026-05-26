@@ -550,6 +550,7 @@ impl Parser {
                 if !self.check(&TokenKind::RightParen) {
                     loop {
                         args.push(self.expression()?);
+                        self.skip_newlines();
                         if !self.matches(&TokenKind::Comma) {
                             break;
                         }
@@ -613,6 +614,7 @@ impl Parser {
         if !self.check(&TokenKind::RightBracket) {
             loop {
                 values.push(self.expression()?);
+                self.skip_newlines();
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }
@@ -639,6 +641,7 @@ impl Parser {
                 self.skip_newlines();
                 let value = self.expression()?;
                 entries.push((key, value));
+                self.skip_newlines();
                 if !self.matches(&TokenKind::Comma) {
                     break;
                 }

@@ -88,7 +88,6 @@ fn open_http_client_request(
     span: Span,
 ) -> IcooResult<HttpClientStream> {
     let parsed = ParsedHttpUrl::parse(url, span)?;
-    let custom_headers = http_client_headers_text(headers, span)?;
     runtime
         .permissions()
         .check_net_connect_endpoint(&parsed.host, parsed.port, span)?;
@@ -115,7 +114,7 @@ fn open_http_client_request(
         method,
         body,
         content_type,
-        &custom_headers,
+        headers,
         proxy_authorization.as_deref(),
         span,
     )?;
@@ -372,14 +371,17 @@ fn write_http_request(
     method: &str,
     body: &[u8],
     content_type: Option<&str>,
-    custom_headers: &str,
+    headers: &HttpClientHeaders,
     proxy_authorization: Option<&str>,
     span: Span,
 ) -> IcooResult<()> {
     let host = parsed.host_header();
     let proxy_authorization = proxy_authorization_header(proxy_authorization, span)?;
     if http_method_has_request_body(method) {
-        let content_type = content_type.unwrap_or("application/octet-stream");
+        let content_type = http_client_header_value(headers, "content-type")
+            .or(content_type)
+            .unwrap_or("application/octet-stream");
+        let custom_headers = http_client_headers_text_excluding(headers, &["content-type"], span)?;
         let head = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: {}\r\n{}{}\r\n",
             method,
@@ -397,6 +399,7 @@ fn write_http_request(
             IcooError::runtime(format!("http client write failed: {}", err), Some(span))
         })?;
     } else {
+        let custom_headers = http_client_headers_text(headers, span)?;
         let request = format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{}{}\r\n",
             method, request_target, host, custom_headers, proxy_authorization
@@ -419,8 +422,22 @@ fn proxy_authorization_header(authorization: Option<&str>, span: Span) -> IcooRe
 }
 
 fn http_client_headers_text(headers: &HttpClientHeaders, span: Span) -> IcooResult<String> {
+    http_client_headers_text_excluding(headers, &[], span)
+}
+
+fn http_client_headers_text_excluding(
+    headers: &HttpClientHeaders,
+    excluded_names: &[&str],
+    span: Span,
+) -> IcooResult<String> {
     let mut text = String::new();
     for (name, value) in headers {
+        if excluded_names
+            .iter()
+            .any(|excluded| name.eq_ignore_ascii_case(excluded))
+        {
+            continue;
+        }
         ensure_http_header_name_value_no_crlf(name, value, span)?;
         text.push_str(name);
         text.push_str(": ");
@@ -428,6 +445,13 @@ fn http_client_headers_text(headers: &HttpClientHeaders, span: Span) -> IcooResu
         text.push_str("\r\n");
     }
     Ok(text)
+}
+
+fn http_client_header_value<'a>(headers: &'a HttpClientHeaders, name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 fn http_method_has_request_body(method: &str) -> bool {

@@ -1,0 +1,57 @@
+export fn build_system_prompt() -> String {
+    return "You are an Icoo coding agent. Plan, call tools, read tool results, then summarize."
+}
+
+export fn next_assistant_message(turn: Int) -> Map<String, Any> {
+    if turn == 0 {
+        return {
+            "role": "assistant",
+            "content": "I will inspect the environment with a shell command.",
+            "tool_calls": [
+                {
+                    "name": "bash",
+                    "args": {
+                        "command": "echo icoo-agent tool execution"
+                    }
+                }
+            ]
+        }
+    }
+
+    if turn == 1 {
+        return {
+            "role": "assistant",
+            "content": "The command worked. I will persist a short session note.",
+            "tool_calls": [
+                {
+                    "name": "write_file",
+                    "args": {
+                        "path": "target/icoo_agent_note.txt",
+                        "content": "icoo_agent completed a Pi-style tool loop"
+                    }
+                }
+            ]
+        }
+    }
+
+    if turn == 2 {
+        return {
+            "role": "assistant",
+            "content": "I will read the note back to verify the file tool result.",
+            "tool_calls": [
+                {
+                    "name": "read_file",
+                    "args": {
+                        "path": "target/icoo_agent_note.txt"
+                    }
+                }
+            ]
+        }
+    }
+
+    return {
+        "role": "assistant",
+        "content": "Done. The agent planned, called tools, verified a tool artifact, compacted context, and saved its session.",
+        "tool_calls": []
+    }
+}

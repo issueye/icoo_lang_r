@@ -13,9 +13,10 @@ use std::rc::Rc;
 impl Interpreter {
     pub fn call_global_main(&mut self) -> IcooResult<()> {
         let span = Span::new(1, 1, 0, 0);
-        let main = self.env.borrow().get("main", span).map_err(|_| {
-            IcooError::runtime("project entry must define fn main()", Some(span))
-        })?;
+        let main =
+            self.env.borrow().get("main", span).map_err(|_| {
+                IcooError::runtime("project entry must define fn main()", Some(span))
+            })?;
         self.call_value(main, Vec::new(), span).map(|_| ())
     }
 
@@ -49,7 +50,10 @@ impl Interpreter {
         self.check_timeout(span)?;
         if self.call_depth >= crate::runtime::limits::MAX_CALL_DEPTH {
             return Err(IcooError::runtime(
-                format!("maximum call stack depth exceeded ({})", crate::runtime::limits::MAX_CALL_DEPTH),
+                format!(
+                    "maximum call stack depth exceeded ({})",
+                    crate::runtime::limits::MAX_CALL_DEPTH
+                ),
                 Some(span),
             ));
         }

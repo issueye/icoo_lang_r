@@ -1,0 +1,5 @@
+from "./agent.icoo" import run_agent
+
+fn main() {
+    run_agent()
+}

@@ -36,5 +36,8 @@ fn test_no_timeout_within_limit() {
         "let x = 1 + 2",
         icoo_lang_r::RuntimeConfig::default().with_timeout(Duration::from_secs(5)),
     );
-    assert!(result.is_ok(), "simple script should complete within timeout");
+    assert!(
+        result.is_ok(),
+        "simple script should complete within timeout"
+    );
 }

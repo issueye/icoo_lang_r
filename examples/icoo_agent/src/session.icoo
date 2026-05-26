@@ -1,0 +1,45 @@
+import "std.io.fs" as fs
+import "std.json" as json
+import "std.path" as path
+
+export fn new_session(config: Map<String, Any>) -> Map<String, Any> {
+    return {
+        "agent": config.get("agent").get("name"),
+        "mode": config.get("agent").get("mode"),
+        "messages": [],
+        "summaries": []
+    }
+}
+
+export fn message(role: String, content: String) -> Map<String, Any> {
+    return {
+        "role": role,
+        "content": content
+    }
+}
+
+export fn tool_message(name: String, result: Map<String, Any>) -> Map<String, Any> {
+    return {
+        "role": "tool",
+        "name": name,
+        "content": result.get("content"),
+        "ok": result.get("ok")
+    }
+}
+
+export fn append_message(session: Map<String, Any>, item: Map<String, Any>) {
+    session.get("messages").push(item)
+}
+
+export fn messages(session: Map<String, Any>) -> Array<Map<String, Any>> {
+    return session.get("messages")
+}
+
+export fn save_session(config: Map<String, Any>, session: Map<String, Any>) {
+    let output_path = config.get("session").get("path")
+    let dir = path.dirname(output_path)
+    if dir != "" {
+        fs.mkdir_all(dir)
+    }
+    fs.write_text(output_path, json.stringify(session))
+}

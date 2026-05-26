@@ -10,14 +10,14 @@ pub mod runtime;
 pub mod typechecker;
 pub mod vm;
 
-use error::IcooError;
 pub use builder::InterpreterBuilder;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use error::IcooError;
 pub use project::{init_project, resolve_project, run_project, run_project_with_output};
 pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};
 pub use runtime::permissions::{PermissionRule, RuntimePermissions};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 pub(crate) fn parse_and_check(source: &str) -> Result<parser::ast::Program, IcooError> {
@@ -41,7 +41,10 @@ where
                 .cloned()
                 .or_else(|| panic_info.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "internal panic".to_string());
-            Err(IcooError::runtime(format!("internal runtime panic: {}", msg), None))
+            Err(IcooError::runtime(
+                format!("internal runtime panic: {}", msg),
+                None,
+            ))
         }
     }
 }
@@ -177,10 +180,7 @@ where
     run_protected(|| interpreter.interpret(&program).map(|_| ()))
 }
 
-pub fn run_source_with_config(
-    source: &str,
-    config: RuntimeConfig,
-) -> Result<(), IcooError> {
+pub fn run_source_with_config(source: &str, config: RuntimeConfig) -> Result<(), IcooError> {
     let program = parse_and_check(source)?;
     let mut interpreter =
         interpreter::Interpreter::with_output_permissions_logger_tls_roots_and_http_config(

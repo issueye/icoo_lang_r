@@ -69,7 +69,12 @@ impl Interpreter {
                 Ok(()) => Ok(()),
                 Err(IcooError::Runtime { message, span, .. }) => {
                     let catch_env = Environment::child(self.env.clone());
-                    let error_text = IcooError::Runtime { message, span, trace: Vec::new() }.to_string();
+                    let error_text = IcooError::Runtime {
+                        message,
+                        span,
+                        trace: Vec::new(),
+                    }
+                    .to_string();
                     catch_env.borrow_mut().define(
                         catch_name.name.clone(),
                         Value::String(error_text),
@@ -183,7 +188,10 @@ impl Interpreter {
             Expr::Array(values, span) => {
                 if values.len() > limits::MAX_ARRAY_LEN {
                     return Err(IcooError::runtime(
-                        format!("array literal exceeds maximum length ({})", limits::MAX_ARRAY_LEN),
+                        format!(
+                            "array literal exceeds maximum length ({})",
+                            limits::MAX_ARRAY_LEN
+                        ),
                         Some(*span),
                     ));
                 }
@@ -196,7 +204,10 @@ impl Interpreter {
             Expr::Map(entries, span) => {
                 if entries.len() > limits::MAX_MAP_ENTRIES {
                     return Err(IcooError::runtime(
-                        format!("map literal exceeds maximum entries ({})", limits::MAX_MAP_ENTRIES),
+                        format!(
+                            "map literal exceeds maximum entries ({})",
+                            limits::MAX_MAP_ENTRIES
+                        ),
                         Some(*span),
                     ));
                 }
@@ -216,7 +227,10 @@ impl Interpreter {
                 }
                 if result.len() > limits::MAX_STRING_LEN {
                     return Err(IcooError::runtime(
-                        format!("template string exceeds maximum length ({})", limits::MAX_STRING_LEN),
+                        format!(
+                            "template string exceeds maximum length ({})",
+                            limits::MAX_STRING_LEN
+                        ),
                         Some(*span),
                     ));
                 }
@@ -227,12 +241,9 @@ impl Interpreter {
                 match op {
                     UnaryOp::Not => Ok(Value::Bool(!right.truthy())),
                     UnaryOp::Negate => match right {
-                        Value::Int(value) => value
-                            .checked_neg()
-                            .map(Value::Int)
-                            .ok_or_else(|| {
-                                IcooError::runtime("integer overflow in negation", Some(*span))
-                            }),
+                        Value::Int(value) => value.checked_neg().map(Value::Int).ok_or_else(|| {
+                            IcooError::runtime("integer overflow in negation", Some(*span))
+                        }),
                         Value::Float(value) => Ok(Value::Float(-value)),
                         _ => Err(IcooError::runtime("operand must be a number", Some(*span))),
                     },
@@ -348,9 +359,7 @@ impl Interpreter {
                 (Value::Int(a), Value::Int(b)) => a
                     .checked_add(b)
                     .map(Value::Int)
-                    .ok_or_else(|| {
-                        IcooError::runtime("integer overflow in addition", Some(span))
-                    }),
+                    .ok_or_else(|| IcooError::runtime("integer overflow in addition", Some(span))),
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + b as f64)),
@@ -362,16 +371,31 @@ impl Interpreter {
                     Some(span),
                 )),
             },
-            BinaryOp::Subtract => numeric_checked(left, right, span, |a, b| {
-                a.checked_sub(b).ok_or("integer overflow in subtraction")
-            }, |a, b| Ok(a - b)),
-            BinaryOp::Multiply => numeric_checked(left, right, span, |a, b| {
-                a.checked_mul(b).ok_or("integer overflow in multiplication")
-            }, |a, b| Ok(a * b)),
+            BinaryOp::Subtract => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| a.checked_sub(b).ok_or("integer overflow in subtraction"),
+                |a, b| Ok(a - b),
+            ),
+            BinaryOp::Multiply => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| a.checked_mul(b).ok_or("integer overflow in multiplication"),
+                |a, b| Ok(a * b),
+            ),
             BinaryOp::Divide => numeric_float(left, right, span, |a, b| a / b),
-            BinaryOp::Remainder => numeric_checked(left, right, span, |a, b| {
-                a.checked_rem(b).ok_or("integer remainder with zero divisor")
-            }, |a, b| Ok(a % b)),
+            BinaryOp::Remainder => numeric_checked(
+                left,
+                right,
+                span,
+                |a, b| {
+                    a.checked_rem(b)
+                        .ok_or("integer remainder with zero divisor")
+                },
+                |a, b| Ok(a % b),
+            ),
             BinaryOp::Equal => Ok(Value::Bool(value_equal(&left, &right))),
             BinaryOp::NotEqual => Ok(Value::Bool(!value_equal(&left, &right))),
             BinaryOp::Less => compare(left, right, span, |a, b| a < b),

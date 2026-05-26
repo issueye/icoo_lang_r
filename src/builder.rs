@@ -55,9 +55,7 @@ impl InterpreterBuilder {
     }
 
     pub fn http_timeout(mut self, timeout: Duration) -> Self {
-        self.http_config = self
-            .http_config
-            .with_timeouts(timeout, timeout, timeout);
+        self.http_config = self.http_config.with_timeouts(timeout, timeout, timeout);
         self
     }
 

@@ -1,0 +1,36 @@
+import "std.env" as env
+import "std.io.fs" as fs
+import "std.toml" as toml
+
+export fn load_config() {
+    let path = "agent.toml"
+    if not fs.exists(path) {
+        path = "examples/icoo_agent/agent.toml"
+    }
+    if fs.exists(path) {
+        let config = toml.parse(fs.read_text(path))
+        apply_env_overrides(config)
+        return config
+    }
+    let config = {
+        "agent": {
+            "name": "icoo_agent",
+            "mode": "mock"
+        },
+        "runtime": {
+            "max_turns": 6,
+            "compact_after_messages": 7
+        },
+        "session": {
+            "path": "target/icoo_agent_session.json"
+        }
+    }
+    apply_env_overrides(config)
+    return config
+}
+
+fn apply_env_overrides(config) {
+    if env.has("ICOO_AGENT_API_KEY") {
+        config.get("agent").set("mode", "real")
+    }
+}

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn icoo() -> Command {
     Command::new(env!("CARGO_BIN_EXE_icoo"))
@@ -100,6 +100,8 @@ fn init_generates_project_scaffold_and_default_config() {
     assert!(pkg.contains("[package]"));
     assert!(pkg.contains("[run]"));
     assert!(pkg.contains("entry = \"src/main.icoo\""));
+    assert!(pkg.contains("[http]"));
+    assert!(pkg.contains("timeout_ms = 5000"));
 
     let run = icoo().arg("run").arg(&dir).output().unwrap();
 
@@ -154,6 +156,31 @@ fn main() {
 }
 
 #[test]
+fn project_run_uses_pkg_http_timeout() {
+    let dir = temp_dir("project_http_timeout");
+    fs::write(
+        dir.join("pkg.toml"),
+        r#"[package]
+name = "http-timeout"
+version = "0.1.0"
+
+[run]
+entry = "src/main.icoo"
+
+[http]
+timeout_ms = 20000
+"#,
+    )
+    .unwrap();
+
+    let config = icoo_lang_r::resolve_project(&dir).unwrap();
+
+    assert_eq!(config.http_config.connect_timeout, Duration::from_secs(20));
+    assert_eq!(config.http_config.read_timeout, Duration::from_secs(20));
+    assert_eq!(config.http_config.write_timeout, Duration::from_secs(20));
+}
+
+#[test]
 fn project_run_requires_main_function() {
     let dir = temp_dir("missing_main");
     fs::create_dir_all(dir.join("src")).unwrap();
@@ -172,6 +199,25 @@ version = "0.1.0"
     assert!(!output.status.success());
     assert_eq!(stdout(&output), "top\n");
     assert!(stderr(&output).contains("project entry must define fn main()"));
+}
+
+#[test]
+fn examples_icoo_agent_project_runs() {
+    let output = icoo()
+        .arg("run")
+        .arg("examples/icoo_agent")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Icoo Agent"));
+    assert!(text.contains("mode: mock"));
+    assert!(text.contains("[tool:bash] icoo-agent tool execution"));
+    assert!(text.contains("[tool:write_file] wrote target/icoo_agent_note.txt"));
+    assert!(text.contains("[tool:read_file] icoo_agent completed a Pi-style tool loop"));
+    assert!(text.contains("[compact] Context compacted after 8 messages"));
+    assert!(text.contains("session: target/icoo_agent_session.json"));
 }
 
 #[test]

@@ -146,7 +146,9 @@ impl Interpreter {
         F: FnMut(String) + 'static,
     {
         let env = Environment::new();
-        let deadline = runtime_config.exec_timeout.map(|t| std::time::Instant::now() + t);
+        let deadline = runtime_config
+            .exec_timeout
+            .map(|t| std::time::Instant::now() + t);
         let mut interpreter = Self {
             env,
             output: Box::new(output),

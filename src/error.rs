@@ -18,10 +18,22 @@ pub enum StackFrameKind {
 
 #[derive(Debug, Clone)]
 pub enum IcooError {
-    Lexer { message: String, span: Span },
-    Parse { message: String, span: Span },
-    Resolve { message: String, span: Span },
-    Type { message: String, span: Span },
+    Lexer {
+        message: String,
+        span: Span,
+    },
+    Parse {
+        message: String,
+        span: Span,
+    },
+    Resolve {
+        message: String,
+        span: Span,
+    },
+    Type {
+        message: String,
+        span: Span,
+    },
     Runtime {
         message: String,
         span: Option<Span>,
@@ -97,7 +109,9 @@ impl fmt::Display for IcooError {
                 write!(f, "{}:{}: type error: {}", span.line, span.column, message)
             }
             IcooError::Runtime {
-                message, span, trace,
+                message,
+                span,
+                trace,
             } => {
                 if let Some(span) = span {
                     write!(

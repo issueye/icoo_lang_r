@@ -167,16 +167,28 @@ fn eval_binary(left: Value, op: BinaryOp, right: Value) -> IcooResult<Value> {
             (a, Value::String(b)) => Ok(Value::String(a.display() + &b)),
             _ => Err(runtime_error("operands must be numbers or strings")),
         },
-        BinaryOp::Subtract => numeric_checked(left, right, |a, b| {
-            a.checked_sub(b).ok_or("integer overflow in subtraction")
-        }, |a, b| Ok(a - b)),
-        BinaryOp::Multiply => numeric_checked(left, right, |a, b| {
-            a.checked_mul(b).ok_or("integer overflow in multiplication")
-        }, |a, b| Ok(a * b)),
+        BinaryOp::Subtract => numeric_checked(
+            left,
+            right,
+            |a, b| a.checked_sub(b).ok_or("integer overflow in subtraction"),
+            |a, b| Ok(a - b),
+        ),
+        BinaryOp::Multiply => numeric_checked(
+            left,
+            right,
+            |a, b| a.checked_mul(b).ok_or("integer overflow in multiplication"),
+            |a, b| Ok(a * b),
+        ),
         BinaryOp::Divide => numeric_float(left, right, |a, b| a / b),
-        BinaryOp::Remainder => numeric_checked(left, right, |a, b| {
-            a.checked_rem(b).ok_or("integer remainder with zero divisor")
-        }, |a, b| Ok(a % b)),
+        BinaryOp::Remainder => numeric_checked(
+            left,
+            right,
+            |a, b| {
+                a.checked_rem(b)
+                    .ok_or("integer remainder with zero divisor")
+            },
+            |a, b| Ok(a % b),
+        ),
         BinaryOp::Equal => Ok(Value::Bool(value_equal(&left, &right))),
         BinaryOp::NotEqual => Ok(Value::Bool(!value_equal(&left, &right))),
         BinaryOp::Less => compare(left, right, |a, b| a < b),

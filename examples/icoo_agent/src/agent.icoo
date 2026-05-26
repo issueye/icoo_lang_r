@@ -1,0 +1,70 @@
+from "./compaction.icoo" import maybe_compact
+from "./config.icoo" import load_config
+from "./llm_provider.icoo" import real_next_assistant_message
+from "./provider.icoo" import build_system_prompt, next_assistant_message
+from "./session.icoo" import append_message, message, messages, new_session, save_session, tool_message
+from "./tools.icoo" import execute_tool, tool_specs
+
+fn print_message(item: Map<String, Any>) {
+    let role = item.get("role")
+    if role == "tool" {
+        print("[tool:" + item.get("name") + "] " + item.get("content").to_string())
+    } else {
+        print("[" + role + "] " + item.get("content").to_string())
+    }
+}
+
+fn execute_tool_calls(session: Map<String, Any>, calls: Array<Map<String, Any>>) {
+    let index = 0
+    while index < calls.len() {
+        let call = calls.at(index)
+        let result = execute_tool(call)
+        let item = tool_message(call.get("name"), result)
+        append_message(session, item)
+        print_message(item)
+        index = index + 1
+    }
+}
+
+fn next_message(config: Map<String, Any>, session: Map<String, Any>, turn: Int) -> Map<String, Any> {
+    if config.get("agent").get("mode") == "real" {
+        return real_next_assistant_message(turn, messages(session))
+    }
+    return next_assistant_message(turn)
+}
+
+export fn run_agent() {
+    let config = load_config()
+    let session = new_session(config)
+    let tools = tool_specs()
+
+    append_message(session, message("system", build_system_prompt()))
+    append_message(session, message("user", "Create a short note proving the Icoo agent loop works."))
+
+    print("Icoo Agent")
+    print("tools: " + tools.len().to_string())
+    print("mode: " + config.get("agent").get("mode"))
+
+    let turn = 0
+    let max_turns = config.get("runtime").get("max_turns")
+    while turn < max_turns {
+        let assistant = next_message(config, session, turn)
+        append_message(session, assistant)
+        print_message(assistant)
+
+        let calls = assistant.get("tool_calls")
+        if calls.len() == 0 {
+            break
+        }
+
+        execute_tool_calls(session, calls)
+        if maybe_compact(config, session) {
+            print("[compact] " + session.get("summaries").at(0).get("content"))
+        }
+        turn = turn + 1
+    }
+
+    save_session(config, session)
+    print("messages: " + messages(session).len().to_string())
+    print("session: " + config.get("session").get("path"))
+}

@@ -1,0 +1,10 @@
+[agent]
+name = "icoo_agent"
+mode = "mock"
+
+[runtime]
+max_turns = 6
+compact_after_messages = 7
+
+[session]
+path = "target/icoo_agent_session.json"
