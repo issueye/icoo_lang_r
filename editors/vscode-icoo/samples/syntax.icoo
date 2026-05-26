@@ -1,0 +1,27 @@
+fn responses_url(base_url: String) -> String {
+    if base_url.contains("/v1") {
+        return base_url + "/responses"
+    }
+    return base_url + "/v1/responses"
+}
+
+fn describe(code: Int) -> String {
+    return match code {
+        1 => "one",
+        2 => "two",
+        _ => code > 10 ? "many" : "other",
+    }
+}
+
+fn describe_with_statement(code: Int) -> String {
+    match code {
+        1 => return "one",
+        2 => return "two",
+        _ => return "other",
+    }
+}
+
+// line comment
+/*
+block comment
+*/

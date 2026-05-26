@@ -76,16 +76,13 @@ fn send_chat_request(url: String, body: String, headers: Map<String, String>) ->
 
 fn build_turn_prompt(turn: Int, message_count: Int) -> String {
     let instruction = "Return exactly one JSON object with keys role, content, tool_calls. Do not use markdown fences. Current message count is " + message_count.to_string() + ". "
-    if turn == 0 {
-        return instruction + "For turn 0, return tool_calls exactly as [{\"name\":\"bash\",\"args\":{\"command\":\"echo icoo-agent real provider\"}}]."
+    
+    return match turn {
+        0 => instruction + "For turn 0, return tool_calls exactly as [{\"name\":\"bash\",\"args\":{\"command\":\"echo icoo-agent real provider\"}}].",
+        1 => instruction + "For turn 1, return tool_calls exactly as [{\"name\":\"write_file\",\"args\":{\"path\":\"target/icoo_agent_note.txt\",\"content\":\"icoo_agent completed a real-provider tool loop.\"}}].",
+        2 => instruction + "For turn 2, return tool_calls exactly as [{\"name\":\"read_file\",\"args\":{\"path\":\"target/icoo_agent_note.txt\"}}].",
+        _ => instruction + "For this final turn, return no tool calls and summarize that the real provider planned, used tools, verified the file, and saved the session.",
     }
-    if turn == 1 {
-        return instruction + "For turn 1, return tool_calls exactly as [{\"name\":\"write_file\",\"args\":{\"path\":\"target/icoo_agent_note.txt\",\"content\":\"icoo_agent completed a real-provider tool loop.\"}}]."
-    }
-    if turn == 2 {
-        return instruction + "For turn 2, return tool_calls exactly as [{\"name\":\"read_file\",\"args\":{\"path\":\"target/icoo_agent_note.txt\"}}]."
-    }
-    return instruction + "For this final turn, return no tool calls and summarize that the real provider planned, used tools, verified the file, and saved the session."
 }
 
 fn normalize_assistant_message(message: Any) -> Map<String, Any> {

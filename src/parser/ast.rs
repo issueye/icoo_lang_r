@@ -38,6 +38,11 @@ pub enum Stmt {
         condition: Expr,
         body: Vec<Stmt>,
     },
+    Match {
+        value: Expr,
+        arms: Vec<MatchStmtArm>,
+        span: Span,
+    },
     Return {
         value: Option<Expr>,
         span: Span,
@@ -149,6 +154,12 @@ pub enum MatchPattern {
 pub struct MatchArm {
     pub pattern: MatchPattern,
     pub value: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchStmtArm {
+    pub pattern: MatchPattern,
+    pub body: Box<Stmt>,
 }
 
 #[derive(Debug, Clone)]

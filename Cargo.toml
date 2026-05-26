@@ -18,6 +18,7 @@ rustls = { version = "0.23", default-features = true, features = ["std"] }
 rustls-native-certs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 toml = "0.8"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 rcgen = "0.14"

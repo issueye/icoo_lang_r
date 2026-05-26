@@ -46,12 +46,34 @@ icoo run
 
 `init` creates `pkg.toml` and `src/main.icoo`. When running a project directory or `pkg.toml`, the runtime reads `run.entry`, loads that entry file, and calls `main()`.
 
+You can also generate build scripts during initialization:
+
+```bash
+cargo run -- init my_app --build-scripts
+```
+
+This additionally creates `build.ps1` and `build.sh` for checking the project and building both a source package and a standalone single-file program.
+
 ### Check a Script
 
 `check` runs lexing, parsing, name resolution, and type checking without executing the script:
 
 ```bash
 cargo run -- check examples/demo.icoo
+```
+
+### Package a Project
+
+`package` creates a source distribution archive for an `.icoo` script or Icoo project:
+
+```bash
+cargo run -- package examples/icoo_agent -o target/icoo_agent.icoo.zip
+```
+
+It can also append the package to the current `icoo` launcher and create a directly runnable single-file program:
+
+```bash
+cargo run -- package examples/icoo_agent --standalone -o target/icoo_agent.exe
 ```
 
 ### Help and Version
@@ -70,9 +92,10 @@ cargo test
 ## CLI Usage
 
 ```text
-icoo init [dir]
+icoo init [dir] [--build-scripts]
 icoo run [file.icoo|project_dir|pkg.toml]
 icoo check <file.icoo>
+icoo package [file.icoo|project_dir|pkg.toml] [-o output] [--standalone]
 icoo <file.icoo|project_dir|pkg.toml>
 icoo --help
 icoo --version
@@ -150,6 +173,7 @@ More examples:
 - Optional type annotations, including `Int`, `Float`, `String`, `Array<T>`, `Map<K, V>`, and `Task<T>`.
 - Functions, return checking, and closures.
 - Classes with declared fields, methods, constructors, single inheritance, and `super`.
+- Comments with `//` line comments, legacy `#` comments, and `/* ... */` block comments.
 - Built-in methods such as `to_string()` and `type_name()`, plus collection and byte helpers.
 - String templates with `f"hello {name}"` and multiline template strings.
 - Coroutines with `async fn`, `await`, `EventLoop`, `Task`, and `sleep(0)`.

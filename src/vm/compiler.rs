@@ -70,6 +70,7 @@ impl Compiler {
             Stmt::TryCatch { catch_name, .. } => {
                 Err(unsupported("try/catch", Some(catch_name.span)))
             }
+            Stmt::Match { span, .. } => Err(unsupported("match statements", Some(*span))),
             Stmt::Return { span, .. } => Err(unsupported("return", Some(*span))),
             Stmt::Yield { span, .. } => Err(unsupported("yield", Some(*span))),
             Stmt::Break(span) => Err(unsupported("break", Some(*span))),
@@ -396,6 +397,7 @@ fn stmt_span(stmt: &Stmt) -> crate::lexer::token::Span {
         Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::Expr(condition) => {
             condition.span()
         }
+        Stmt::Match { span, .. } => *span,
         Stmt::ExportDecl(inner) => stmt_span(inner),
     }
 }

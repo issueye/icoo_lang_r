@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zip::ZipArchive;
 
 fn icoo() -> Command {
     Command::new(env!("CARGO_BIN_EXE_icoo"))
@@ -96,6 +97,8 @@ fn init_generates_project_scaffold_and_default_config() {
     assert!(init.status.success(), "stderr: {}", stderr(&init));
     assert!(dir.join("pkg.toml").exists());
     assert!(dir.join("src").join("main.icoo").exists());
+    assert!(!dir.join("build.ps1").exists());
+    assert!(!dir.join("build.sh").exists());
     let pkg = fs::read_to_string(dir.join("pkg.toml")).unwrap();
     assert!(pkg.contains("[package]"));
     assert!(pkg.contains("[run]"));
@@ -107,6 +110,26 @@ fn init_generates_project_scaffold_and_default_config() {
 
     assert!(run.status.success(), "stderr: {}", stderr(&run));
     assert_eq!(stdout(&run), "hello from Icoo\n");
+}
+
+#[test]
+fn init_can_generate_build_scripts() {
+    let dir = temp_dir("init_scripts").join("my_app");
+
+    let init = icoo()
+        .arg("init")
+        .arg(&dir)
+        .arg("--build-scripts")
+        .output()
+        .unwrap();
+
+    assert!(init.status.success(), "stderr: {}", stderr(&init));
+    let ps1 = fs::read_to_string(dir.join("build.ps1")).unwrap();
+    let sh = fs::read_to_string(dir.join("build.sh")).unwrap();
+    assert!(ps1.contains("icoo-app.icoo.zip"));
+    assert!(ps1.contains("--standalone"));
+    assert!(sh.contains("icoo-app.icoo.zip"));
+    assert!(sh.contains("--standalone"));
 }
 
 #[test]
@@ -181,6 +204,126 @@ timeout_ms = 20000
 }
 
 #[test]
+fn package_project_creates_source_archive() {
+    let dir = temp_dir("package_project");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("target")).unwrap();
+    fs::write(
+        dir.join("pkg.toml"),
+        r#"[package]
+name = "packed-app"
+version = "1.2.3"
+
+[run]
+entry = "src/main.icoo"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src").join("main.icoo"),
+        r#"
+fn main() {
+    print("packed")
+}
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("target").join("ignored.txt"), "ignored").unwrap();
+    let output = dir.join("dist").join("packed.icoo.zip");
+
+    let package = icoo()
+        .arg("package")
+        .arg(&dir)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+
+    assert!(package.status.success(), "stderr: {}", stderr(&package));
+    assert!(stdout(&package).contains("packaged"));
+    let entries = zip_entries(&output);
+    assert!(entries.contains(&"ICOOPACKAGE.toml".to_string()));
+    assert!(entries.contains(&"README.package.txt".to_string()));
+    assert!(entries.contains(&"pkg.toml".to_string()));
+    assert!(entries.contains(&"src/main.icoo".to_string()));
+    assert!(!entries.contains(&"target/ignored.txt".to_string()));
+}
+
+#[test]
+fn package_single_file_creates_minimal_archive() {
+    let script = temp_script(
+        "hello.icoo",
+        r#"
+print("hello")
+"#,
+    );
+    fs::write(
+        script.parent().unwrap().join("extra.icoo"),
+        "print(\"extra\")",
+    )
+    .unwrap();
+    let output = script.parent().unwrap().join("hello.icoo.zip");
+
+    let package = icoo()
+        .arg("package")
+        .arg(&script)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+
+    assert!(package.status.success(), "stderr: {}", stderr(&package));
+    let entries = zip_entries(&output);
+    assert!(entries.contains(&"ICOOPACKAGE.toml".to_string()));
+    assert!(entries.contains(&"README.package.txt".to_string()));
+    assert!(entries.contains(&"hello.icoo".to_string()));
+    assert!(!entries.contains(&"extra.icoo".to_string()));
+}
+
+#[test]
+fn package_standalone_binary_runs_embedded_project() {
+    let dir = temp_dir("package_standalone");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("pkg.toml"),
+        r#"[package]
+name = "standalone-app"
+version = "0.1.0"
+
+[run]
+entry = "src/main.icoo"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src").join("main.icoo"),
+        r#"
+fn main() {
+    print("standalone ok")
+}
+"#,
+    )
+    .unwrap();
+    let output = dir.join("standalone_app.exe");
+
+    let package = icoo()
+        .arg("package")
+        .arg(&dir)
+        .arg("--standalone")
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+
+    assert!(package.status.success(), "stderr: {}", stderr(&package));
+    assert!(stdout(&package).contains("standalone binary"));
+
+    let run = Command::new(&output).output().unwrap();
+    assert!(run.status.success(), "stderr: {}", stderr(&run));
+    assert_eq!(stdout(&run), "standalone ok\n");
+}
+
+#[test]
 fn project_run_requires_main_function() {
     let dir = temp_dir("missing_main");
     fs::create_dir_all(dir.join("src")).unwrap();
@@ -199,6 +342,17 @@ version = "0.1.0"
     assert!(!output.status.success());
     assert_eq!(stdout(&output), "top\n");
     assert!(stderr(&output).contains("project entry must define fn main()"));
+}
+
+fn zip_entries(path: &PathBuf) -> Vec<String> {
+    let file = fs::File::open(path).unwrap();
+    let mut archive = ZipArchive::new(file).unwrap();
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        entries.push(archive.by_index(index).unwrap().name().to_string());
+    }
+    entries.sort();
+    entries
 }
 
 #[test]
@@ -227,6 +381,7 @@ fn help_and_version_succeed() {
     let help_text = stdout(&help);
     assert!(help_text.contains("Usage:"));
     assert!(help_text.contains("icoo init [dir]"));
+    assert!(help_text.contains("--build-scripts"));
     assert!(help_text.contains("icoo run [file.icoo|project_dir|pkg.toml]"));
     assert!(help_text.contains("icoo check <file.icoo>"));
 

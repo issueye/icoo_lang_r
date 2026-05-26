@@ -3,6 +3,7 @@ pub mod error;
 pub mod interpreter;
 pub mod lexer;
 pub mod native_modules;
+pub mod packager;
 pub mod parser;
 pub mod project;
 pub mod resolver;
@@ -12,7 +13,11 @@ pub mod vm;
 
 pub use builder::InterpreterBuilder;
 use error::IcooError;
-pub use project::{init_project, resolve_project, run_project, run_project_with_output};
+pub use packager::{package_path, run_embedded_package, PackageOptions, PackageResult};
+pub use project::{
+    init_project, init_project_with_options, resolve_project, run_project, run_project_with_output,
+    InitProjectOptions,
+};
 pub use runtime::config::RuntimeConfig;
 pub use runtime::http_config::{HttpProxyConfig, RuntimeHttpConfig};
 pub use runtime::logging::{LogLevel, RuntimeLogRecord, RuntimeLogger};

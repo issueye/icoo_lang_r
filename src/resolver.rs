@@ -108,6 +108,15 @@ impl Resolver {
                 self.loop_depth -= 1;
                 result?;
             }
+            Stmt::Match { value, arms, .. } => {
+                self.resolve_expr(value)?;
+                for arm in arms {
+                    if let MatchPattern::Expr(pattern) = &arm.pattern {
+                        self.resolve_expr(pattern)?;
+                    }
+                    self.resolve_stmt(&arm.body, false)?;
+                }
+            }
             Stmt::Return { value, span } => {
                 if self.function == FunctionContext::None {
                     return Err(IcooError::resolve(
@@ -270,5 +279,6 @@ fn stmt_span(stmt: &Stmt) -> crate::lexer::token::Span {
         Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::Expr(condition) => {
             condition.span()
         }
+        Stmt::Match { span, .. } => *span,
     }
 }

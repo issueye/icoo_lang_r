@@ -18,6 +18,15 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.block.icoo",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.icoo",
+          "match": "//.*$"
+        },
+        {
           "name": "comment.line.number-sign.icoo",
           "match": "#.*$"
         }
@@ -187,7 +196,7 @@
       "patterns": [
         {
           "name": "keyword.operator.assignment.icoo",
-          "match": "(=|=>|<-|->)"
+          "match": "(=>|->|<-|=)"
         },
         {
           "name": "keyword.operator.comparison.icoo",

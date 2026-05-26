@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "icoo-lang",
   "license": "UNLICENSED",
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:icoo"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -30,6 +34,21 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "configuration": {
+      "title": "Icoo",
+      "properties": {
+        "icoo.executablePath": {
+          "type": "string",
+          "default": "icoo",
+          "description": "Path to the icoo executable used for Problems diagnostics."
+        },
+        "icoo.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run icoo check for .icoo files and show diagnostics in Problems."
+        }
+      }
+    },
     "grammars": [
       {
         "language": "icoo",

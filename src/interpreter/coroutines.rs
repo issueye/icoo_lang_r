@@ -106,6 +106,7 @@ fn compile_statement(
                 instructions.push(CoroutineInstr::Stmt(stmt.clone()));
             }
         }
+        Stmt::Match { .. } => instructions.push(CoroutineInstr::Stmt(stmt.clone())),
         _ => instructions.push(CoroutineInstr::Stmt(stmt.clone())),
     }
 }

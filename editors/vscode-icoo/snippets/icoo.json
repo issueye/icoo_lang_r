@@ -51,12 +51,22 @@
   "Match": {
     "prefix": "match",
     "body": [
+      "let ${1:result} = match ${2:value} {",
+      "    ${3:pattern} => ${4:value},",
+      "    _ => ${0:fallback},",
+      "}"
+    ],
+    "description": "Match expression"
+  },
+  "Match Statement": {
+    "prefix": "matchs",
+    "body": [
       "match ${1:value} {",
       "    ${2:pattern} => ${3:result},",
       "    _ => ${0:fallback},",
       "}"
     ],
-    "description": "Match expression"
+    "description": "Match statement"
   },
   "Try Catch": {
     "prefix": "try",

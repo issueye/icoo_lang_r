@@ -117,6 +117,22 @@ impl Interpreter {
                 }
                 Ok(())
             }
+            Stmt::Match { value, arms, .. } => {
+                let value = self.eval(value)?;
+                for arm in arms {
+                    let matched = match &arm.pattern {
+                        MatchPattern::Wildcard(_) => true,
+                        MatchPattern::Expr(pattern) => {
+                            let pattern = self.eval(pattern)?;
+                            value_equal(&value, &pattern)
+                        }
+                    };
+                    if matched {
+                        return self.execute(&arm.body);
+                    }
+                }
+                Ok(())
+            }
             Stmt::Return { value, .. } => {
                 let value = if let Some(value) = value {
                     self.eval(value)?

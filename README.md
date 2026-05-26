@@ -46,12 +46,34 @@ icoo run
 
 `init` 会生成 `pkg.toml` 和 `src/main.icoo`。当运行目录或 `pkg.toml` 时，运行时会读取 `pkg.toml` 的 `run.entry`，加载入口文件并调用 `main()`。
 
+也可以在初始化时生成构建脚本：
+
+```bash
+cargo run -- init my_app --build-scripts
+```
+
+这会额外生成 `build.ps1` 和 `build.sh`，用于检查项目并构建源码包和 standalone 单文件程序。
+
 ### 检查脚本
 
 `check` 会执行词法分析、语法分析、名称解析和类型检查，但不会运行脚本：
 
 ```bash
 cargo run -- check examples/demo.icoo
+```
+
+### 打包项目
+
+`package` 会把 `.icoo` 脚本或 Icoo 项目打成源码分发包：
+
+```bash
+cargo run -- package examples/icoo_agent -o target/icoo_agent.icoo.zip
+```
+
+也可以把源码包追加到当前 `icoo` 启动器后，生成一个可直接运行的单文件程序：
+
+```bash
+cargo run -- package examples/icoo_agent --standalone -o target/icoo_agent.exe
 ```
 
 ### 查看帮助和版本
@@ -70,9 +92,10 @@ cargo test
 ## CLI 用法
 
 ```text
-icoo init [dir]
+icoo init [dir] [--build-scripts]
 icoo run [file.icoo|project_dir|pkg.toml]
 icoo check <file.icoo>
+icoo package [file.icoo|project_dir|pkg.toml] [-o output] [--standalone]
 icoo <file.icoo|project_dir|pkg.toml>
 icoo --help
 icoo --version
@@ -150,6 +173,7 @@ print(add(2, 3).to_string())
 - 可选类型标注：支持 `Int`、`Float`、`String`、`Array<T>`、`Map<K, V>`、`Task<T>` 等标注。
 - 函数与闭包：支持函数声明、返回值检查和闭包捕获。
 - 类系统：支持显式字段声明、方法、构造函数、单继承和 `super`。
+- 代码注释：支持 `//` 单行注释、`#` 兼容注释和 `/* ... */` 多行注释。
 - 内置方法：基础值支持 `to_string()`、`type_name()`，集合和字节类型提供常用方法。
 - 字符串模板：支持 `f"hello {name}"` 和多行模板字符串。
 - 协程：支持 `async fn`、`await`、`EventLoop`、`Task` 和 `sleep(0)`。

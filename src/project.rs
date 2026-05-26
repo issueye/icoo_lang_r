@@ -20,6 +20,33 @@ const DEFAULT_MAIN: &str = r#"fn main() {
 }
 "#;
 
+const BUILD_PS1: &str = r#"$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$icoo = Get-Command icoo -ErrorAction Stop
+$dist = Join-Path $root "dist"
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+& $icoo.Source check (Join-Path $root "src/main.icoo")
+& $icoo.Source package $root -o (Join-Path $dist "icoo-app.icoo.zip")
+& $icoo.Source package $root --standalone -o (Join-Path $dist "icoo-app.exe")
+
+Write-Host "Built packages in $dist"
+"#;
+
+const BUILD_SH: &str = r#"#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DIST="$ROOT/dist"
+mkdir -p "$DIST"
+
+icoo check "$ROOT/src/main.icoo"
+icoo package "$ROOT" -o "$DIST/icoo-app.icoo.zip"
+icoo package "$ROOT" --standalone -o "$DIST/icoo-app"
+
+echo "Built packages in $DIST"
+"#;
+
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
     pub root: PathBuf,
@@ -27,7 +54,19 @@ pub struct ProjectConfig {
     pub http_config: RuntimeHttpConfig,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InitProjectOptions {
+    pub build_scripts: bool,
+}
+
 pub fn init_project(path: impl AsRef<Path>) -> IcooResult<()> {
+    init_project_with_options(path, InitProjectOptions::default())
+}
+
+pub fn init_project_with_options(
+    path: impl AsRef<Path>,
+    options: InitProjectOptions,
+) -> IcooResult<()> {
     let root = path.as_ref();
     std::fs::create_dir_all(root).map_err(|err| {
         IcooError::runtime(
@@ -80,7 +119,40 @@ pub fn init_project(path: impl AsRef<Path>) -> IcooResult<()> {
             None,
         )
     })?;
+    if options.build_scripts {
+        write_build_scripts(root)?;
+    }
 
+    Ok(())
+}
+
+fn write_build_scripts(root: &Path) -> IcooResult<()> {
+    let ps1_path = root.join("build.ps1");
+    let sh_path = root.join("build.sh");
+    if ps1_path.exists() {
+        return Err(IcooError::runtime(
+            format!("build script '{}' already exists", ps1_path.display()),
+            None,
+        ));
+    }
+    if sh_path.exists() {
+        return Err(IcooError::runtime(
+            format!("build script '{}' already exists", sh_path.display()),
+            None,
+        ));
+    }
+    std::fs::write(&ps1_path, BUILD_PS1).map_err(|err| {
+        IcooError::runtime(
+            format!("failed to write '{}': {}", ps1_path.display(), err),
+            None,
+        )
+    })?;
+    std::fs::write(&sh_path, BUILD_SH).map_err(|err| {
+        IcooError::runtime(
+            format!("failed to write '{}': {}", sh_path.display(), err),
+            None,
+        )
+    })?;
     Ok(())
 }
 

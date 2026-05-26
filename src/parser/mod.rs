@@ -13,11 +13,16 @@ pub fn parse(tokens: Vec<Token>) -> IcooResult<Program> {
 struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    allow_comma_statement_end: bool,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, current: 0 }
+        Self {
+            tokens,
+            current: 0,
+            allow_comma_statement_end: false,
+        }
     }
 
     fn parse(mut self) -> IcooResult<Program> {
@@ -178,6 +183,9 @@ impl Parser {
         if self.matches(&TokenKind::While) {
             return self.while_stmt();
         }
+        if self.matches(&TokenKind::Match) {
+            return self.match_stmt();
+        }
         if self.matches(&TokenKind::Return) {
             let span = self.previous().span;
             let value = if self.is_statement_boundary() {
@@ -240,6 +248,38 @@ impl Parser {
         let condition = self.expression()?;
         let body = self.block()?;
         Ok(Stmt::While { condition, body })
+    }
+
+    fn match_stmt(&mut self) -> IcooResult<Stmt> {
+        let span = self.previous().span;
+        let value = self.expression()?;
+        self.consume(TokenKind::LeftBrace, "expected '{' after match value")?;
+        let mut arms = Vec::new();
+        self.skip_newlines();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            let pattern = if self.matches_ident("_") {
+                MatchPattern::Wildcard(self.previous().span)
+            } else {
+                MatchPattern::Expr(self.expression()?)
+            };
+            self.consume(TokenKind::FatArrow, "expected '=>' after match pattern")?;
+            self.skip_newlines();
+            let previous_allow_comma = self.allow_comma_statement_end;
+            self.allow_comma_statement_end = true;
+            let body = Box::new(self.declaration()?);
+            self.allow_comma_statement_end = previous_allow_comma;
+            arms.push(MatchStmtArm { pattern, body });
+            self.skip_newlines();
+            if self.matches(&TokenKind::Comma) {
+                self.skip_newlines();
+                continue;
+            }
+            if self.check(&TokenKind::RightBrace) {
+                break;
+            }
+        }
+        self.consume(TokenKind::RightBrace, "expected '}' after match arms")?;
+        Ok(Stmt::Match { value, arms, span })
     }
 
     fn try_catch_stmt(&mut self) -> IcooResult<Stmt> {
@@ -798,6 +838,7 @@ impl Parser {
         if self.matches(&TokenKind::Newline)
             || self.check(&TokenKind::RightBrace)
             || self.check(&TokenKind::Eof)
+            || (self.allow_comma_statement_end && self.check(&TokenKind::Comma))
         {
             Ok(())
         } else {

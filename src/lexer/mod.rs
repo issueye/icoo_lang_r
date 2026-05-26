@@ -4,7 +4,8 @@ use crate::error::{IcooError, IcooResult};
 use token::{Span, Token, TokenKind};
 
 pub fn lex(source: &str) -> IcooResult<Vec<Token>> {
-    Lexer::new(source).lex()
+    let source = strip_comments(source)?;
+    Lexer::new(&source).lex()
 }
 
 struct Lexer<'a> {
@@ -383,6 +384,169 @@ impl<'a> Lexer<'a> {
             kind,
             span: Span::new(line, column, start, end),
         });
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Position {
+    line: usize,
+    column: usize,
+}
+
+fn strip_comments(source: &str) -> IcooResult<String> {
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len());
+    let mut i = 0;
+    let mut position = Position { line: 1, column: 1 };
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let multiline = source[i..].starts_with("\"\"\"");
+                copy_string(source, &mut output, &mut i, &mut position, multiline)?;
+            }
+            b'#' => replace_line_comment(source, &mut output, &mut i, &mut position),
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                replace_line_comment(source, &mut output, &mut i, &mut position);
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                replace_block_comment(source, &mut output, &mut i, &mut position)?;
+            }
+            _ => copy_char(source, &mut output, &mut i, &mut position),
+        }
+    }
+
+    Ok(output)
+}
+
+fn copy_string(
+    source: &str,
+    output: &mut String,
+    i: &mut usize,
+    position: &mut Position,
+    multiline: bool,
+) -> IcooResult<()> {
+    let start = *i;
+    let start_position = *position;
+    let delimiter_len = if multiline { 3 } else { 1 };
+
+    for _ in 0..delimiter_len {
+        copy_char(source, output, i, position);
+    }
+
+    while *i < source.len() {
+        if multiline && source[*i..].starts_with("\"\"\"") {
+            for _ in 0..delimiter_len {
+                copy_char(source, output, i, position);
+            }
+            return Ok(());
+        }
+        if !multiline && source.as_bytes()[*i] == b'"' {
+            copy_char(source, output, i, position);
+            return Ok(());
+        }
+        let ch = source[*i..].chars().next().unwrap();
+        if !multiline && (ch == '\n' || ch == '\r') {
+            return Err(IcooError::lexer(
+                "unterminated string",
+                Span::new(
+                    start_position.line,
+                    start_position.column,
+                    start,
+                    source.len(),
+                ),
+            ));
+        }
+        if !multiline && source.as_bytes()[*i] == b'\\' {
+            copy_char(source, output, i, position);
+            if *i < source.len() {
+                copy_char(source, output, i, position);
+            }
+            continue;
+        }
+        copy_char(source, output, i, position);
+    }
+
+    let message = if multiline {
+        "unterminated multiline string"
+    } else {
+        "unterminated string"
+    };
+    Err(IcooError::lexer(
+        message,
+        Span::new(
+            start_position.line,
+            start_position.column,
+            start,
+            source.len(),
+        ),
+    ))
+}
+
+fn replace_line_comment(source: &str, output: &mut String, i: &mut usize, position: &mut Position) {
+    while *i < source.len() {
+        let ch = source[*i..].chars().next().unwrap();
+        if ch == '\n' {
+            return;
+        }
+        replace_char(source, output, i, position);
+    }
+}
+
+fn replace_block_comment(
+    source: &str,
+    output: &mut String,
+    i: &mut usize,
+    position: &mut Position,
+) -> IcooResult<()> {
+    let start = *i;
+    let start_position = *position;
+    replace_char(source, output, i, position);
+    replace_char(source, output, i, position);
+
+    while *i < source.len() {
+        if source[*i..].starts_with("*/") {
+            replace_char(source, output, i, position);
+            replace_char(source, output, i, position);
+            return Ok(());
+        }
+        replace_char(source, output, i, position);
+    }
+
+    Err(IcooError::lexer(
+        "unterminated block comment",
+        Span::new(
+            start_position.line,
+            start_position.column,
+            start,
+            source.len(),
+        ),
+    ))
+}
+
+fn copy_char(source: &str, output: &mut String, i: &mut usize, position: &mut Position) {
+    let ch = source[*i..].chars().next().unwrap();
+    output.push(ch);
+    advance_position(ch, i, position);
+}
+
+fn replace_char(source: &str, output: &mut String, i: &mut usize, position: &mut Position) {
+    let ch = source[*i..].chars().next().unwrap();
+    if ch == '\n' || ch == '\r' {
+        output.push(ch);
+    } else {
+        output.push(' ');
+    }
+    advance_position(ch, i, position);
+}
+
+fn advance_position(ch: char, i: &mut usize, position: &mut Position) {
+    *i += ch.len_utf8();
+    if ch == '\n' {
+        position.line += 1;
+        position.column = 1;
+    } else {
+        position.column += 1;
     }
 }
 

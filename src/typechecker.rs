@@ -257,6 +257,15 @@ impl TypeChecker {
                 self.infer_expr(condition)?;
                 self.check_block(body)?;
             }
+            Stmt::Match { value, arms, .. } => {
+                self.infer_expr(value)?;
+                for arm in arms {
+                    if let MatchPattern::Expr(pattern) = &arm.pattern {
+                        self.infer_expr(pattern)?;
+                    }
+                    self.check_stmt(&arm.body)?;
+                }
+            }
             Stmt::Return { value, span } => {
                 let value_type = if let Some(value) = value {
                     self.infer_expr(value)?

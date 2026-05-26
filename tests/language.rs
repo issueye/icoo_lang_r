@@ -36,6 +36,40 @@ fn free_port() -> u16 {
 }
 
 #[test]
+fn supports_line_and_block_comments() {
+    let output = run(r#"
+// double-slash line comment
+# legacy line comment
+let x = 10 / 2 // trailing line comment
+let y = 2 /* inline block comment */ + 3
+/*
+multi-line
+block comment
+*/ let z = 4
+print((x + y).to_string())
+print(z.to_string())
+print("http://example.test/*not-comment*/")
+"#)
+    .unwrap();
+
+    assert_eq!(
+        output,
+        vec!["10.0", "4", "http://example.test/*not-comment*/"]
+    );
+}
+
+#[test]
+fn rejects_unterminated_block_comment() {
+    let err = run(r#"
+/* missing close
+print("never")
+"#)
+    .unwrap_err();
+
+    assert!(err.contains("unterminated block comment"));
+}
+
+#[test]
 fn supports_final_once_assignment() {
     let output = run(r#"
 final runtime_id: String
@@ -223,6 +257,25 @@ print(match status {
 "#)
     .unwrap();
     assert_eq!(output, vec!["adult", "yes", "two", "nil", "a"]);
+}
+
+#[test]
+fn supports_match_statements_with_return_arms() {
+    let output = run(r#"
+fn label(code: Int) -> String {
+    match code {
+        0 => return "zero",
+        1 => return "one",
+        _ => return "many",
+    }
+}
+
+print(label(0))
+print(label(2))
+"#)
+    .unwrap();
+
+    assert_eq!(output, vec!["zero", "many"]);
 }
 
 #[test]
